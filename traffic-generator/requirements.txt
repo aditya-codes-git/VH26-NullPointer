@@ -1,0 +1,4 @@
+# Python Traffic Generator Dependencies
+# Note: traffic_generator.py uses the Python standard library by default for 0-install execution.
+# Optional dependencies:
+requests>=2.28.0

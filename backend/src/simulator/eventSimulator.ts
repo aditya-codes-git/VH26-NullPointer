@@ -2,6 +2,8 @@ import { nanoid } from 'nanoid';
 import { EventType, PipelineEvent } from '../models/event.js';
 import { classifyEvent } from '../classifier/eventClassifier.js';
 import { PipelineConfig } from '../config/pipelineConfig.js';
+import { KafkaEventProducer } from '../kafka/producer.js';
+import { isProducerReady } from '../kafka/kafkaClient.js';
 
 export type SimulatorMode = 'STOPPED' | 'NORMAL' | 'SPIKE';
 
@@ -10,11 +12,21 @@ export class EventSimulator {
   private timer: NodeJS.Timeout | null = null;
   private config: PipelineConfig;
   private onEventCallback: (event: PipelineEvent) => void;
+  private kafkaProducer?: KafkaEventProducer;
   private isPausedByBackpressure = false;
 
-  constructor(config: PipelineConfig, onEventCallback: (event: PipelineEvent) => void) {
+  constructor(
+    config: PipelineConfig,
+    onEventCallback: (event: PipelineEvent) => void,
+    kafkaProducer?: KafkaEventProducer
+  ) {
     this.config = config;
     this.onEventCallback = onEventCallback;
+    this.kafkaProducer = kafkaProducer;
+  }
+
+  public setKafkaProducer(producer: KafkaEventProducer): void {
+    this.kafkaProducer = producer;
   }
 
   public getMode(): SimulatorMode {
@@ -52,23 +64,37 @@ export class EventSimulator {
       return;
     }
 
-    const eventsPerMin = mode === 'SPIKE' 
-      ? this.config.SPIKE_RATE_PER_MIN 
-      : this.config.NORMAL_RATE_PER_MIN;
+    const eventsPerMin =
+      mode === 'SPIKE' ? this.config.SPIKE_RATE_PER_MIN : this.config.NORMAL_RATE_PER_MIN;
 
-    // We emit events in tight intervals (e.g. every 50ms) to ensure smooth realistic streaming
+    // Emit events in tight intervals (50ms) to ensure realistic streaming
     const intervalMs = 50;
     const intervalsPerMinute = (60 * 1000) / intervalMs;
     const eventsPerInterval = Math.max(1, Math.round(eventsPerMin / intervalsPerMinute));
 
     this.timer = setInterval(() => {
       if (this.isPausedByBackpressure) {
-        return; // Admission paused to protect system from physical memory saturation
+        return; // Admission paused to protect system from saturation
       }
 
       for (let i = 0; i < eventsPerInterval; i++) {
         const event = this.generateRandomEvent();
-        this.onEventCallback(event);
+
+        // If Kafka producer is connected, route through Kafka; otherwise fallback for demo resilience
+        if (this.kafkaProducer && isProducerReady()) {
+          this.kafkaProducer
+            .publish({
+              id: event.id,
+              type: event.type,
+              timestamp: event.createdAt,
+              payload: event.payload,
+            })
+            .catch(() => {
+              this.onEventCallback(event);
+            });
+        } else {
+          this.onEventCallback(event);
+        }
       }
     }, intervalMs);
   }
@@ -79,11 +105,11 @@ export class EventSimulator {
     const roll = Math.random();
     let type: EventType;
 
-    if (roll < 0.10) {
+    if (roll < 0.1) {
       type = 'PAYMENT';
-    } else if (roll < 0.20) {
+    } else if (roll < 0.2) {
       type = 'ORDER';
-    } else if (roll < 0.40) {
+    } else if (roll < 0.4) {
       type = 'INVENTORY';
     } else if (roll < 0.75) {
       type = 'CLICK';
