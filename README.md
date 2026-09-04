@@ -6,7 +6,6 @@
 
 ## 1. Project Title
 
-**AdaptiFlow**  
 *An adaptive event-processing pipeline that protects critical workloads during sudden traffic spikes.*
 
 ---
