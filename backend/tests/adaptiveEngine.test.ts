@@ -57,9 +57,9 @@ describe('AdaptiveDecisionEngine', () => {
     expect(result.state).toBe('OVERLOADED');
   });
 
-  it('selects SHED mode when queue pressure exceeds safety threshold', () => {
-    // Fill queue past shed threshold (80% of 3000 = 2400 items)
-    for (let i = 0; i < 2500; i++) {
+  it('selects DEFER + SHED mode when queue pressure exceeds safety threshold', () => {
+    // Fill queue past extreme threshold (92% of 3000 = 2760 items)
+    for (let i = 0; i < 2800; i++) {
       queueManager.lowQueue.enqueue({
         id: `ev_${i}`,
         type: 'CLICK',
@@ -72,7 +72,7 @@ describe('AdaptiveDecisionEngine', () => {
     }
 
     const result = engine.evaluate(400, 50);
-    expect(result.strategy).toBe('SHED');
+    expect(result.strategy).toBe('DEFER + SHED');
     expect(result.state).toBe('EXTREME');
   });
 });

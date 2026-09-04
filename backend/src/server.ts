@@ -23,7 +23,6 @@ app.use(express.json());
 
 const config = { ...DEFAULT_CONFIG };
 const queueManager = new QueueManager(config);
-const priorityRouter = new PriorityRouter(queueManager);
 const batchProcessor = new BatchProcessor(config);
 const sheddingPolicy = new SheddingPolicy(queueManager);
 const backpressureController = new BackpressureController(config, queueManager);
@@ -34,6 +33,12 @@ const metricsCollector = new MetricsCollector(
   sheddingPolicy,
   backpressureController,
   adaptiveEngine
+);
+
+const priorityRouter = new PriorityRouter(
+  queueManager,
+  sheddingPolicy,
+  metricsCollector
 );
 
 const workerPool = new WorkerPool(
@@ -64,11 +69,7 @@ const simulator = new EventSimulator(
   config,
   (event) => {
     metricsCollector.recordIncomingEvent(event);
-    const routeResult = priorityRouter.route(event);
-
-    if (routeResult.dropped) {
-      sheddingPolicy.executeShedding(1, routeResult.reason || 'CAPACITY_REJECT');
-    }
+    priorityRouter.route(event);
   },
   kafkaProducer
 );

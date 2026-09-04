@@ -137,29 +137,55 @@ export class WorkerPool {
         }
 
         case 'DEFER': {
-          // Low-priority execution is held back to save CPU for critical work.
-          if (this.queueManager.lowQueue.size() > 0 && Date.now() - this.lastDeferLog > 1200) {
+          // Low-priority execution is paced: CRITICAL and HIGH have absolute priority,
+          // but admitted LOW events continue to be processed through micro-batches!
+          if (Date.now() - this.lastDeferLog > 1000) {
             this.lastDeferLog = Date.now();
             if (this.metricsCollector) {
-              this.metricsCollector.recordDeferred('Queue pressure elevated: deferring non-critical execution to protect critical path');
+              this.metricsCollector.recordDeferred('Queue pressure elevated: paced low-priority batching to prioritize critical path');
             }
+          }
+
+          const targetBatchSize = this.adaptiveEngine ? this.adaptiveEngine.getCurrentBatchSize() : this.config.BATCH_SIZE;
+          const batchSize = Math.min(targetBatchSize, this.queueManager.lowQueue.size());
+          if (batchSize > 0) {
+            const batch = this.queueManager.lowQueue.dequeueBatch(batchSize);
+            const result = await this.batchProcessor.processBatch(batch);
+            if (this.onBatchProcessed) {
+              this.onBatchProcessed(result.events, result.durationMs);
+            }
+            didWork = true;
           }
           break;
         }
 
+        case 'DEFER + SHED':
         case 'SHED': {
-          // Shed excess low priority items down to safe threshold
-          const excess = this.queueManager.lowQueue.size() - Math.round(this.config.LOW_QUEUE_CAPACITY * this.config.DEFER_PRESSURE_THRESHOLD);
+          // BATCH PROCESSING REMAINS ACTIVE: Admitted LOW events are continuously drained in large batches!
+          const targetBatchSize = this.adaptiveEngine ? this.adaptiveEngine.getCurrentBatchSize() : 250;
+          const batchSize = Math.min(targetBatchSize, this.queueManager.lowQueue.size());
+          if (batchSize > 0) {
+            const batch = this.queueManager.lowQueue.dequeueBatch(batchSize);
+            const result = await this.batchProcessor.processBatch(batch);
+            if (this.onBatchProcessed) {
+              this.onBatchProcessed(result.events, result.durationMs);
+            }
+            didWork = true;
+          }
+
+          // Shed excess only if queue pressure remains beyond the 95% safety ceiling
+          const maxSafeCapacity = Math.round(this.config.LOW_QUEUE_CAPACITY * 0.95);
+          const excess = this.queueManager.lowQueue.size() - maxSafeCapacity;
           if (excess > 0) {
             const countToShed = Math.min(excess, 50);
-            const result = this.sheddingPolicy.executeShedding(countToShed, 'Controlled shedding due to queue pressure');
+            const result = this.sheddingPolicy.executeShedding(countToShed, 'Controlled shedding due to queue saturation');
             if (result.entries.length > 0 && this.metricsCollector) {
               for (const entry of result.entries) {
                 const now = entry.timestamp;
                 const d = new Date(now);
                 const timeStr = `${d.toTimeString().split(' ')[0]}.${String(now % 1000).padStart(3, '0')}`;
                 this.metricsCollector.addActivityLog({
-                  id: entry.eventId,
+                  id: entry.id,
                   type: entry.type,
                   priority: entry.priority,
                   strategy: 'SHED',

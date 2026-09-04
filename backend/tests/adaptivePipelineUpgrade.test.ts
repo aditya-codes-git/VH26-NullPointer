@@ -31,7 +31,7 @@ describe('Adaptive Pipeline Upgrade - Comprehensive Verification', () => {
       adaptiveEngine
     );
     batchProcessor = new BatchProcessor(DEFAULT_CONFIG);
-    priorityRouter = new PriorityRouter(queueManager);
+    priorityRouter = new PriorityRouter(queueManager, sheddingPolicy, metricsCollector);
   });
 
   it('1. maintains independent queue sizes and capacities for CRITICAL, HIGH, and LOW', () => {
@@ -83,8 +83,8 @@ describe('Adaptive Pipeline Upgrade - Comprehensive Verification', () => {
     expect(evalNominal.highStrategy).toBe('STREAM');
     expect(evalNominal.lowStrategy).toBe('STREAM');
 
-    // Fill low queue to induce BATCH mode
-    for (let i = 0; i < 800; i++) {
+    // Fill low queue to induce BATCH mode (>= 30% of 3000 = 900 items)
+    for (let i = 0; i < 1000; i++) {
       queueManager.lowQueue.enqueue({
         id: `low_${i}`,
         type: 'LOG',
@@ -101,8 +101,8 @@ describe('Adaptive Pipeline Upgrade - Comprehensive Verification', () => {
     expect(evalBatch.highStrategy).toBe('STREAM');
     expect(evalBatch.lowStrategy).toBe('BATCH');
 
-    // Fill low queue to induce SHED mode
-    for (let i = 800; i < 2500; i++) {
+    // Fill low queue to induce DEFER + SHED mode (>= 92% of 3000 = 2760 items)
+    for (let i = 1000; i < 2800; i++) {
       queueManager.lowQueue.enqueue({
         id: `low_${i}`,
         type: 'CLICK',
@@ -117,7 +117,7 @@ describe('Adaptive Pipeline Upgrade - Comprehensive Verification', () => {
     const evalShed = adaptiveEngine.evaluate(400, 50);
     expect(evalShed.criticalStrategy).toBe('STREAM');
     expect(evalShed.highStrategy).toBe('STREAM');
-    expect(evalShed.lowStrategy).toBe('SHED');
+    expect(evalShed.lowStrategy).toBe('DEFER + SHED');
   });
 
   it('3. protects critical events and guarantees zero critical loss', () => {
@@ -170,7 +170,7 @@ describe('Adaptive Pipeline Upgrade - Comprehensive Verification', () => {
     );
 
     // Fill low queue to shed threshold
-    for (let i = 0; i < 2500; i++) {
+    for (let i = 0; i < 2900; i++) {
       queueManager.lowQueue.enqueue({
         id: `click_${i}`,
         type: 'CLICK',
@@ -195,7 +195,7 @@ describe('Adaptive Pipeline Upgrade - Comprehensive Verification', () => {
       });
     }
 
-    workerPool.setStrategy('SHED');
+    workerPool.setStrategy('DEFER + SHED');
     workerPool.start();
 
     // Allow worker loop ticks
@@ -320,6 +320,10 @@ describe('Adaptive Pipeline Upgrade - Comprehensive Verification', () => {
     expect(snapshot.queues.high.status).toBe('ACTIVE');
     expect(snapshot.queues.low.name).toBe('LOW');
     expect(snapshot.queues.low.status).toBe('ADAPTIVE');
+    expect(snapshot.queues.low.accepted).toBeDefined();
+    expect(snapshot.queues.low.batched).toBeDefined();
+    expect(snapshot.queues.low.deferredCycles).toBeDefined();
+    expect(snapshot.queues.low.shed).toBeDefined();
 
     // Strategies telemetry
     expect(snapshot.strategies).toBeDefined();
@@ -407,6 +411,238 @@ describe('Adaptive Pipeline Upgrade - Comprehensive Verification', () => {
     expect(received).toBe(processed + queued + shed + inFlight);
 
     // Critical Loss Invariant: Critical Lost must be 0
+    expect(snapshot.criticalLost).toBe(0);
+    expect(snapshot.criticalShed).toBe(0);
+    expect(snapshot.safetyViolations).toBe(0);
+  });
+
+  it('12. performs controlled admission shedding when low queue reaches capacity, preventing event loss', () => {
+    // Fill low queue to maximum capacity (3000)
+    for (let i = 0; i < 3000; i++) {
+      const ev: PipelineEvent = {
+        id: `fill_${i}`,
+        type: 'LOG',
+        priority: 'LOW',
+        payload: {},
+        createdAt: Date.now(),
+        queuedAt: Date.now(),
+        status: 'QUEUED',
+      };
+      metricsCollector.recordIncomingEvent(ev);
+      priorityRouter.route(ev);
+    }
+
+    expect(queueManager.lowQueue.size()).toBe(3000);
+    expect(metricsCollector.lowAccepted).toBe(3000);
+
+    // Now send 10 excess LOW events
+    for (let i = 0; i < 10; i++) {
+      const excessEv: PipelineEvent = {
+        id: `excess_${i}`,
+        type: 'CLICK',
+        priority: 'LOW',
+        payload: {},
+        createdAt: Date.now(),
+        queuedAt: Date.now(),
+        status: 'QUEUED',
+      };
+      metricsCollector.recordIncomingEvent(excessEv);
+      const res = priorityRouter.route(excessEv);
+      expect(res.dropped).toBe(true);
+    }
+
+    // All 10 excess events must be recorded in shed count
+    expect(sheddingPolicy.totalShedCount).toBe(10);
+    expect(sheddingPolicy.clickShedCount).toBe(10);
+
+    const snapshot = metricsCollector.getSnapshot();
+    // Accounting MUST strictly hold with 0 discrepancy!
+    expect(snapshot.totalReceived).toBe(3010);
+    expect(snapshot.totalProcessed).toBe(0);
+    expect(snapshot.criticalQueueSize + snapshot.highQueueSize + snapshot.lowQueueSize).toBe(3000);
+    expect(snapshot.shedCount).toBe(10);
+    expect(snapshot.totalReceived).toBe(
+      snapshot.totalProcessed +
+      (snapshot.criticalQueueSize + snapshot.highQueueSize + snapshot.lowQueueSize) +
+      snapshot.shedCount +
+      snapshot.criticalInFlight
+    );
+  });
+
+  it('13. keeps BATCH processing active while in DEFER + SHED mode', async () => {
+    const workerPool = new WorkerPool(
+      DEFAULT_CONFIG,
+      queueManager,
+      batchProcessor,
+      sheddingPolicy,
+      adaptiveEngine
+    );
+    workerPool.registerMetricsCollector(metricsCollector);
+
+    let lowBatchedCount = 0;
+    workerPool.setListeners(
+      () => {},
+      (events, durationMs) => {
+        metricsCollector.recordBatchProcessed(events, durationMs);
+        lowBatchedCount += events.length;
+      }
+    );
+
+    // Fill low queue past 95%
+    for (let i = 0; i < 2900; i++) {
+      queueManager.lowQueue.enqueue({
+        id: `low_${i}`,
+        type: 'CLICK',
+        priority: 'LOW',
+        payload: {},
+        createdAt: Date.now(),
+        queuedAt: Date.now(),
+        status: 'QUEUED',
+      });
+    }
+
+    workerPool.setStrategy('DEFER + SHED');
+    workerPool.start();
+
+    // Allow worker loop ticks
+    await new Promise((r) => setTimeout(r, 120));
+    workerPool.stop();
+
+    // Verifies LOW is still being processed in batches, NOT disabled!
+    expect(lowBatchedCount).toBeGreaterThan(0);
+    expect(metricsCollector.lowBatched).toBeGreaterThan(0);
+    expect(sheddingPolicy.totalShedCount).toBeGreaterThan(0);
+  });
+
+  it('14. demonstrates hysteresis deadband preventing strategy oscillation', async () => {
+    // Fill to 35% (enters BATCH)
+    for (let i = 0; i < 1050; i++) {
+      queueManager.lowQueue.enqueue({
+        id: `low_${i}`,
+        type: 'LOG',
+        priority: 'LOW',
+        payload: {},
+        createdAt: Date.now(),
+        queuedAt: Date.now(),
+        status: 'QUEUED',
+      });
+    }
+
+    const eval1 = adaptiveEngine.evaluate(100, 50);
+    expect(eval1.strategy).toBe('BATCH');
+
+    // Drain slightly to 25% (between exit threshold 20% and entry threshold 30%)
+    for (let i = 0; i < 300; i++) {
+      queueManager.lowQueue.dequeue();
+    }
+    expect(queueManager.lowQueue.getPressure()).toBe(0.25);
+
+    // Hysteresis deadband: should REMAIN in BATCH mode!
+    const eval2 = adaptiveEngine.evaluate(20, 50);
+    expect(eval2.strategy).toBe('BATCH');
+
+    // Drain below 20% exit threshold and wait dwell time
+    for (let i = 0; i < 200; i++) {
+      queueManager.lowQueue.dequeue();
+    }
+    expect(queueManager.lowQueue.getPressure()).toBeLessThan(0.20);
+    await new Promise((r) => setTimeout(r, 1050));
+
+    const eval3 = adaptiveEngine.evaluate(10, 50);
+    expect(eval3.strategy).toBe('STREAM');
+  });
+
+  it('15. verifies the full extreme load lifecycle: 100% capacity, concurrent batching + shedding, Diff = 0', async () => {
+    metricsCollector.reset();
+    sheddingPolicy.totalShedCount = 0;
+    sheddingPolicy.clickShedCount = 0;
+    sheddingPolicy.logShedCount = 0;
+
+    const workerPool = new WorkerPool(
+      DEFAULT_CONFIG,
+      queueManager,
+      batchProcessor,
+      sheddingPolicy,
+      adaptiveEngine
+    );
+    workerPool.registerMetricsCollector(metricsCollector);
+    workerPool.setListeners(
+      () => {},
+      (events, durationMs) => {
+        metricsCollector.recordBatchProcessed(events, durationMs);
+      }
+    );
+
+    // 1. Send LOW events until queue reaches 100% (3000 / 3000)
+    for (let i = 0; i < 3000; i++) {
+      const ev: PipelineEvent = {
+        id: `low_${i}`,
+        type: i % 2 === 0 ? 'CLICK' : 'LOG',
+        priority: 'LOW',
+        payload: {},
+        createdAt: Date.now(),
+        queuedAt: Date.now(),
+        status: 'QUEUED',
+      };
+      metricsCollector.recordIncomingEvent(ev);
+      priorityRouter.route(ev);
+    }
+
+    expect(queueManager.lowQueue.size()).toBe(3000);
+    expect(metricsCollector.lowAccepted).toBe(3000);
+
+    // 2. Evaluate state: LOW queue at 100% must trigger DEFER + SHED
+    const evalRes = adaptiveEngine.evaluate(500, 100);
+    expect(evalRes.strategy).toBe('DEFER + SHED');
+    expect(evalRes.lowStrategy).toBe('DEFER + SHED');
+    expect(evalRes.sheddingStatus).toBe('ENABLED');
+
+    // 3. Send 30 excess LOW events while queue is at 3,000 capacity -> triggers admission shedding
+    for (let i = 3000; i < 3030; i++) {
+      const excessEv: PipelineEvent = {
+        id: `excess_${i}`,
+        type: i % 2 === 0 ? 'CLICK' : 'LOG',
+        priority: 'LOW',
+        payload: {},
+        createdAt: Date.now(),
+        queuedAt: Date.now(),
+        status: 'QUEUED',
+      };
+      metricsCollector.recordIncomingEvent(excessEv);
+      const res = priorityRouter.route(excessEv);
+      expect(res.dropped).toBe(true);
+    }
+
+    // 4. Start worker in DEFER + SHED mode - verify it is STILL actively batching and draining!
+    workerPool.setStrategy('DEFER + SHED');
+    workerPool.start();
+
+    // Allow worker loop ticks to process batches
+    await new Promise((r) => setTimeout(r, 200));
+    workerPool.stop();
+
+    // 5. Verify outcomes:
+    // - Some events got shed
+    expect(sheddingPolicy.totalShedCount).toBeGreaterThan(0);
+    expect(metricsCollector.lowShed).toBeGreaterThan(0);
+
+    // - LOW worker was STILL actively batching and draining the queue
+    expect(metricsCollector.lowBatched).toBeGreaterThan(0);
+    expect(metricsCollector.totalProcessed).toBeGreaterThan(0);
+
+    // - Queue was drained from 3000
+    expect(queueManager.lowQueue.size()).toBeLessThan(3000);
+
+    // 6. Verify instantaneous event accounting: Received = Processed + Queued + Shed + InFlight
+    const snapshot = metricsCollector.getSnapshot();
+    const queued = snapshot.criticalQueueSize + snapshot.highQueueSize + snapshot.lowQueueSize;
+    const accounted = snapshot.totalProcessed + queued + snapshot.shedCount + snapshot.criticalInFlight;
+    const diff = snapshot.totalReceived - accounted;
+
+    expect(snapshot.totalReceived).toBe(3030);
+    expect(diff).toBe(0);
+
+    // 7. Critical safety invariant: zero critical loss or shedding
     expect(snapshot.criticalLost).toBe(0);
     expect(snapshot.criticalShed).toBe(0);
     expect(snapshot.safetyViolations).toBe(0);

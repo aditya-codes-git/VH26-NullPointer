@@ -32,10 +32,12 @@ export const StatusHeader: React.FC<StatusHeaderProps> = ({ telemetry, connected
           label: 'DEFER (Low-Priority Held)',
         };
       case 'SHED':
+      case 'DEFER + SHED':
+      default:
         return {
           bg: 'bg-rose-500/10 border-rose-500/30 text-rose-400',
           dot: 'bg-rose-500 animate-ping',
-          label: 'SHED (Policy Overload Shedding)',
+          label: strategy === 'DEFER + SHED' ? 'DEFER + SHED (Excess Ingress Shed)' : 'SHED (Policy Overload Shedding)',
         };
     }
   };

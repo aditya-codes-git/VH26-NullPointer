@@ -26,6 +26,13 @@ export class MetricsCollector {
 
   public lowReceived = 0;
   public lowProcessed = 0;
+  public lowAccepted = 0;
+  public lowBatched = 0;
+  public lowDeferredCycles = 0;
+
+  public get lowShed(): number {
+    return this.sheddingPolicy.totalShedCount;
+  }
 
   public batchedCount = 0;
   public deferredCount = 0;
@@ -153,10 +160,15 @@ export class MetricsCollector {
     }
   }
 
+  public recordLowAccepted(): void {
+    this.lowAccepted++;
+  }
+
   public recordBatchProcessed(events: PipelineEvent[], durationMs: number): void {
     if (events.length === 0) return;
     const now = Date.now();
     this.batchedCount += events.length;
+    this.lowBatched += events.length;
     this.totalProcessed += events.length;
 
     for (const event of events) {
@@ -184,6 +196,7 @@ export class MetricsCollector {
   public recordDeferred(reason = 'Queue pressure elevated: deferring non-critical execution to prioritize critical pipeline'): void {
     const now = Date.now();
     this.deferredCount++;
+    this.lowDeferredCycles++;
     this.addActivityLog({
       id: `def_${Date.now().toString().slice(-6)}`,
       type: 'CLICK',
@@ -308,6 +321,10 @@ export class MetricsCollector {
         queuedCount: lowQueueSize,
         strategy: evaluation.lowStrategy,
         status: 'ADAPTIVE' as const,
+        accepted: this.lowAccepted,
+        batched: this.lowBatched,
+        deferredCycles: this.lowDeferredCycles,
+        shed: this.sheddingPolicy.totalShedCount,
       },
     };
 
@@ -401,6 +418,10 @@ export class MetricsCollector {
 
       lowReceived: this.lowReceived,
       lowProcessed: this.lowProcessed,
+      lowAccepted: this.lowAccepted,
+      lowBatched: this.lowBatched,
+      lowDeferredCycles: this.lowDeferredCycles,
+      lowShed: this.sheddingPolicy.totalShedCount,
 
       batchedCount: this.batchedCount,
       deferredCount: this.deferredCount,
@@ -435,6 +456,9 @@ export class MetricsCollector {
     this.highProcessed = 0;
     this.lowReceived = 0;
     this.lowProcessed = 0;
+    this.lowAccepted = 0;
+    this.lowBatched = 0;
+    this.lowDeferredCycles = 0;
     this.batchedCount = 0;
     this.deferredCount = 0;
     this.incomingTimestamps = [];

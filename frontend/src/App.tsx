@@ -177,6 +177,10 @@ export const App: React.FC = () => {
     queuedCount: telemetry?.lowQueueSize ?? 0,
     strategy: lowStrategy,
     status: 'ADAPTIVE',
+    accepted: telemetry?.lowAccepted ?? 0,
+    batched: telemetry?.lowBatched ?? 0,
+    deferredCycles: telemetry?.lowDeferredCycles ?? 0,
+    shed: telemetry?.lowShed ?? telemetry?.shedCount ?? 0,
   };
 
   // Shedding Telemetry from backend
@@ -809,6 +813,26 @@ export const App: React.FC = () => {
                     <div className="text-right">
                       <span className="text-slate-400 block">Processed:</span>
                       <span className="font-bold text-slate-800">{lowQueue.processedCount.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  {/* Graceful Degradation Breakdown: Shows LOW is degraded, not disabled */}
+                  <div className="grid grid-cols-4 gap-1.5 pt-2 text-[10px] border-t border-slate-100 font-mono text-center">
+                    <div className="bg-slate-50 p-1.5 rounded border border-slate-200">
+                      <span className="text-slate-400 block text-[9px] uppercase font-sans">Accepted</span>
+                      <span className="font-bold text-slate-800">{(lowQueue.accepted ?? 0).toLocaleString()}</span>
+                    </div>
+                    <div className="bg-blue-50 p-1.5 rounded border border-blue-200">
+                      <span className="text-blue-600 block text-[9px] uppercase font-sans">Batched</span>
+                      <span className="font-bold text-blue-800">{(lowQueue.batched ?? 0).toLocaleString()}</span>
+                    </div>
+                    <div className="bg-amber-50 p-1.5 rounded border border-amber-200">
+                      <span className="text-amber-600 block text-[9px] uppercase font-sans">Deferred</span>
+                      <span className="font-bold text-amber-800">{lowQueue.deferredCycles ?? 0} cyc</span>
+                    </div>
+                    <div className="bg-rose-50 p-1.5 rounded border border-rose-200">
+                      <span className="text-rose-600 block text-[9px] uppercase font-sans">Shed</span>
+                      <span className="font-bold text-rose-800">{(lowQueue.shed ?? 0).toLocaleString()}</span>
                     </div>
                   </div>
                 </div>

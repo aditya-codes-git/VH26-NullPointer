@@ -25,9 +25,54 @@ export class SheddingPolicy {
   }
 
   /**
-   * Drops non-critical items that exceed the target safe size.
+   * Directly sheds a single non-critical event (e.g. on queue admission rejection).
+   * Invariant: Critical & High events must NEVER be admission-shed.
+   */
+  public shedSingleEvent(event: PipelineEvent, reason: string): ShedLogEntry | null {
+    if (event.priority !== 'LOW') {
+      this.totalSafetyViolations++;
+      if (event.priority === 'CRITICAL') {
+        this.queueManager.criticalQueue.enqueue(event);
+      } else if (event.priority === 'HIGH') {
+        this.queueManager.highQueue.enqueue(event);
+      }
+      return null;
+    }
+
+    event.status = 'SHED';
+    event.dropReason = reason;
+    event.strategy = 'SHED';
+
+    const entry: ShedLogEntry = {
+      id: event.id,
+      eventId: event.id,
+      type: event.type,
+      priority: event.priority,
+      reason,
+      timestamp: Date.now(),
+    };
+
+    this.totalShedCount++;
+    if (event.type === 'CLICK') {
+      this.clickShedCount++;
+    } else if (event.type === 'LOG') {
+      this.logShedCount++;
+    }
+
+    this.lastShedEvent = entry;
+    this.lastShedReason = reason;
+
+    this.recentShedLogs.unshift(entry);
+    if (this.recentShedLogs.length > this.maxLogHistory) {
+      this.recentShedLogs.pop();
+    }
+
+    return entry;
+  }
+
+  /**
+   * Drops non-critical items that exceed the target safe size from the queue.
    * CRITICAL INVARIANT: Critical events must NEVER be shed.
-   * If a critical event is detected here due to an unexpected bug, we intercept it safely.
    */
   public executeShedding(countToShed: number, reason: string): SheddingResult {
     let shedCount = 0;
@@ -42,44 +87,12 @@ export class SheddingPolicy {
       const candidate = this.queueManager.lowQueue.dequeue();
       if (!candidate) break;
 
-      // Fail-safe protection: if a critical event is somehow in the low queue, DO NOT SHED
-      if (candidate.priority === 'CRITICAL') {
+      const entry = this.shedSingleEvent(candidate, reason);
+      if (entry) {
+        shedCount++;
+        entries.push(entry);
+      } else {
         safetyViolations++;
-        this.totalSafetyViolations++;
-        // Re-enqueue into the protected critical queue immediately!
-        this.queueManager.criticalQueue.enqueue(candidate);
-        continue;
-      }
-
-      candidate.status = 'SHED';
-      candidate.dropReason = reason;
-      candidate.strategy = 'SHED';
-
-      const entry: ShedLogEntry = {
-        id: candidate.id,
-        eventId: candidate.id,
-        type: candidate.type,
-        priority: candidate.priority,
-        reason,
-        timestamp: Date.now(),
-      };
-
-      shedCount++;
-      this.totalShedCount++;
-
-      if (candidate.type === 'CLICK') {
-        this.clickShedCount++;
-      } else if (candidate.type === 'LOG') {
-        this.logShedCount++;
-      }
-
-      this.lastShedEvent = entry;
-      this.lastShedReason = reason;
-      entries.push(entry);
-
-      this.recentShedLogs.unshift(entry);
-      if (this.recentShedLogs.length > this.maxLogHistory) {
-        this.recentShedLogs.pop();
       }
     }
 

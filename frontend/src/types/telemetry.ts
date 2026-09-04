@@ -1,6 +1,6 @@
 export type EventType = 'ORDER' | 'PAYMENT' | 'INVENTORY' | 'CLICK' | 'LOG';
 export type EventPriority = 'CRITICAL' | 'HIGH' | 'LOW';
-export type ProcessingStrategy = 'STREAM' | 'BATCH' | 'DEFER' | 'SHED';
+export type ProcessingStrategy = 'STREAM' | 'BATCH' | 'DEFER' | 'SHED' | 'DEFER + SHED';
 export type SystemPressureState = 'NORMAL' | 'PRESSURED' | 'OVERLOADED' | 'EXTREME';
 
 export interface ShedLogEntry {
@@ -24,7 +24,7 @@ export interface ActivityLogEntry {
 }
 
 export interface QueueTelemetry {
-  name: string;
+  name?: string;
   size: number;
   capacity: number;
   pressure: number;
@@ -33,6 +33,10 @@ export interface QueueTelemetry {
   status: 'PROTECTED' | 'ACTIVE' | 'ADAPTIVE';
   processedCount: number;
   queuedCount: number;
+  accepted?: number;
+  batched?: number;
+  deferredCycles?: number;
+  shed?: number;
 }
 
 export interface BatchSizeObservation {
@@ -133,6 +137,10 @@ export interface TelemetrySnapshot {
 
   lowReceived: number;
   lowProcessed: number;
+  lowAccepted?: number;
+  lowBatched?: number;
+  lowDeferredCycles?: number;
+  lowShed?: number;
 
   batchedCount: number;
   deferredCount: number;

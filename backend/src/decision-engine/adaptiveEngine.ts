@@ -32,6 +32,12 @@ export class AdaptiveDecisionEngine {
   private currentBatchSize = 10;
   private currentBatchSizeReason = 'Nominal queue depth: minimum batch size active.';
 
+  // Hysteresis & State Tracking
+  private currentStrategy: ProcessingStrategy = 'STREAM';
+  private currentState: SystemPressureState = 'NORMAL';
+  private lastTransitionTime = Date.now();
+  private readonly minDwellTimeMs = 1000;
+
   constructor(config: PipelineConfig, queueManager: QueueManager) {
     this.config = config;
     this.queueManager = queueManager;
@@ -44,6 +50,17 @@ export class AdaptiveDecisionEngine {
 
   public getCurrentBatchSizeReason(): string {
     return this.currentBatchSizeReason;
+  }
+
+  private getStrategyRank(strategy: ProcessingStrategy): number {
+    switch (strategy) {
+      case 'STREAM': return 0;
+      case 'BATCH': return 1;
+      case 'DEFER': return 2;
+      case 'SHED':
+      case 'DEFER + SHED': return 3;
+      default: return 0;
+    }
   }
 
   /**
@@ -82,6 +99,7 @@ export class AdaptiveDecisionEngine {
    * 1. Queue Pressure (current non-critical queue size vs. capacity)
    * 2. Rate Imbalance (incoming arrival rate vs. worker processing throughput)
    * 3. Backlog Growth Rate (change in queue depth over time)
+   * 4. Asymmetric Hysteresis (Immediate attack on load, 10% deadband + dwell time on recovery)
    */
   public evaluate(incomingRatePerSec: number, processingRatePerSec: number): DecisionEvaluation {
     const now = Date.now();
@@ -104,37 +122,71 @@ export class AdaptiveDecisionEngine {
       ? incomingRatePerSec / processingRatePerSec 
       : (incomingRatePerSec > 0 ? 2.0 : 1.0);
 
-    // Theoretical maximum throughput of worker pool (~140/s per concurrency)
     const maxWorkerCapacity = this.config.WORKER_CONCURRENCY * 140;
     const workerLoadPercent = Math.min(100, Math.round((processingRatePerSec / Math.max(1, maxWorkerCapacity)) * 100));
 
-    let state: SystemPressureState = 'NORMAL';
-    let strategy: ProcessingStrategy = 'STREAM';
-    let reason = 'System nominal: queue pressure low, throughput matching arrival.';
+    // Dynamic Hysteresis State Machine
+    let targetStrategy: ProcessingStrategy = this.currentStrategy;
+    let targetState: SystemPressureState = this.currentState;
 
-    // Tier 4: EXTREME OVERLOAD -> SHED
-    if (lowQueuePressure >= this.config.SHED_PRESSURE_THRESHOLD) {
-      state = 'EXTREME';
-      strategy = 'SHED';
-      reason = `Extreme backlog: Low-priority queue pressure (${(lowQueuePressure * 100).toFixed(1)}%) reached safety limit. Controlled shedding active for non-critical logs while business-critical stream is protected.`;
+    // Asymmetric entry/exit thresholds (10% deadband)
+    const isExtreme = lowQueuePressure >= 0.92;
+    const exitExtreme = lowQueuePressure < 0.85;
+
+    const isOverloaded = lowQueuePressure >= 0.70 || (lowQueuePressure >= 0.40 && rateImbalanceRatio > 1.8 && this.smoothedGrowthRate > 50);
+    const exitOverloaded = lowQueuePressure < 0.60;
+
+    const isPressured = lowQueuePressure >= 0.30 || (lowQueueSize > 50 && this.smoothedGrowthRate > 20) || rateImbalanceRatio > 1.3;
+    const exitPressured = lowQueuePressure < 0.20 && rateImbalanceRatio <= 1.1;
+
+    // State machine with clean hysteresis:
+    // When in a state, check for upgrades (immediate) or downgrades (via exit threshold + dwell time)
+    if (this.currentStrategy === 'DEFER + SHED' || this.currentStrategy === 'SHED') {
+      if (exitExtreme) {
+        targetStrategy = isOverloaded ? 'DEFER' : (isPressured ? 'BATCH' : 'STREAM');
+        targetState = isOverloaded ? 'OVERLOADED' : (isPressured ? 'PRESSURED' : 'NORMAL');
+      }
+    } else if (this.currentStrategy === 'DEFER') {
+      if (isExtreme) {
+        targetStrategy = 'DEFER + SHED';
+        targetState = 'EXTREME';
+      } else if (exitOverloaded) {
+        targetStrategy = isPressured ? 'BATCH' : 'STREAM';
+        targetState = isPressured ? 'PRESSURED' : 'NORMAL';
+      }
+    } else if (this.currentStrategy === 'BATCH') {
+      if (isExtreme) {
+        targetStrategy = 'DEFER + SHED';
+        targetState = 'EXTREME';
+      } else if (isOverloaded) {
+        targetStrategy = 'DEFER';
+        targetState = 'OVERLOADED';
+      } else if (exitPressured) {
+        targetStrategy = 'STREAM';
+        targetState = 'NORMAL';
+      }
+    } else {
+      // Current state: STREAM
+      if (isExtreme) {
+        targetStrategy = 'DEFER + SHED';
+        targetState = 'EXTREME';
+      } else if (isOverloaded) {
+        targetStrategy = 'DEFER';
+        targetState = 'OVERLOADED';
+      } else if (isPressured) {
+        targetStrategy = 'BATCH';
+        targetState = 'PRESSURED';
+      }
     }
-    // Tier 3: HIGH LOAD / OVERLOADED -> DEFER
-    else if (lowQueuePressure >= this.config.DEFER_PRESSURE_THRESHOLD || (lowQueuePressure >= 0.40 && rateImbalanceRatio > 1.8 && this.smoothedGrowthRate > 50)) {
-      state = 'OVERLOADED';
-      strategy = 'DEFER';
-      reason = `System overloaded: Low queue pressure ${(lowQueuePressure * 100).toFixed(1)}% with rate deficit (${rateImbalanceRatio.toFixed(1)}x). Deferring non-critical processing to dedicate CPU to critical path.`;
-    }
-    // Tier 2: MODERATE PRESSURE / GROWING BACKLOG -> BATCH
-    else if (lowQueuePressure >= this.config.BATCH_PRESSURE_THRESHOLD || (lowQueueSize > 50 && this.smoothedGrowthRate > 20) || rateImbalanceRatio > 1.3) {
-      state = 'PRESSURED';
-      strategy = 'BATCH';
-      reason = `Pressure detected: Ingestion (${incomingRatePerSec.toFixed(0)}/s) outpaces single-event processing. Micro-batching engaged to amortize execution overhead.`;
-    }
-    // Tier 1: NORMAL -> STREAM
-    else {
-      state = 'NORMAL';
-      strategy = 'STREAM';
-      reason = 'Nominal load: direct individual stream processing active across all priority tiers.';
+
+    // Apply minimum dwell time on downgrade (prevents flapping around thresholds)
+    const isDowngrade = this.getStrategyRank(targetStrategy) < this.getStrategyRank(this.currentStrategy);
+    if (!isDowngrade || (now - this.lastTransitionTime >= this.minDwellTimeMs)) {
+      if (this.currentStrategy !== targetStrategy) {
+        this.currentStrategy = targetStrategy;
+        this.currentState = targetState;
+        this.lastTransitionTime = now;
+      }
     }
 
     // Dynamic batch size computation
@@ -146,18 +198,30 @@ export class AdaptiveDecisionEngine {
     this.currentBatchSize = batchSize;
     this.currentBatchSizeReason = batchSizeReason;
 
+    // Formulate descriptive, plain-English explanation
+    let reason = '';
+    if (this.currentStrategy === 'DEFER + SHED' || this.currentStrategy === 'SHED') {
+      reason = `Capacity saturated: Low queue pressure is ${(lowQueuePressure * 100).toFixed(1)}%. BATCH processing remains active (size ${batchSize}) to drain admitted backlog while shedding excess ingress to protect memory.`;
+    } else if (this.currentStrategy === 'DEFER') {
+      reason = `Elevated load: Low queue pressure is ${(lowQueuePressure * 100).toFixed(1)}%. Paced batch processing active; reserving priority for critical and high streams while continuing to drain low backlog.`;
+    } else if (this.currentStrategy === 'BATCH') {
+      reason = `Pressure detected: Ingestion (${incomingRatePerSec.toFixed(0)}/s) outpaces single-event processing. Micro-batching engaged (${batchSize} ev/batch) to amortize execution overhead.`;
+    } else {
+      reason = 'Nominal load: direct individual stream processing active across all priority tiers.';
+    }
+
     // Per-tier strategies:
     // CRITICAL and HIGH remain STREAM while LOW dynamically adapts
     const criticalStrategy: ProcessingStrategy = 'STREAM';
     const highStrategy: ProcessingStrategy = 'STREAM';
-    const lowStrategy: ProcessingStrategy = strategy;
+    const lowStrategy: ProcessingStrategy = this.currentStrategy;
 
     return {
-      strategy,
+      strategy: this.currentStrategy,
       criticalStrategy,
       highStrategy,
       lowStrategy,
-      state,
+      state: this.currentState,
       lowQueuePressure,
       highQueuePressure,
       criticalQueuePressure,
@@ -167,8 +231,7 @@ export class AdaptiveDecisionEngine {
       batchSize,
       batchSizeReason,
       reason,
-      sheddingStatus: strategy === 'SHED' ? 'ENABLED' : 'DISABLED',
+      sheddingStatus: (this.currentStrategy === 'DEFER + SHED' || this.currentStrategy === 'SHED') ? 'ENABLED' : 'DISABLED',
     };
   }
 }
-
