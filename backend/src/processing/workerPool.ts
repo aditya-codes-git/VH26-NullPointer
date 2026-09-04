@@ -23,6 +23,9 @@ export class WorkerPool {
 
   private onEventProcessed: OnEventProcessedListener | null = null;
   private onBatchProcessed: OnBatchProcessedListener | null = null;
+  private metricsCollector: any = null;
+  private activeCriticalWorkers = 0;
+  private lastDeferLog = 0;
 
   constructor(
     config: PipelineConfig,
@@ -34,6 +37,10 @@ export class WorkerPool {
     this.queueManager = queueManager;
     this.batchProcessor = batchProcessor;
     this.sheddingPolicy = sheddingPolicy;
+  }
+
+  public registerMetricsCollector(collector: any): void {
+    this.metricsCollector = collector;
   }
 
   public setStrategy(strategy: ProcessingStrategy): void {
@@ -72,7 +79,18 @@ export class WorkerPool {
       // STEP 1: Always check Critical Queue first (Highest Priority)
       const criticalEvent = this.queueManager.criticalQueue.dequeue();
       if (criticalEvent) {
-        await this.processSingleEvent(criticalEvent, 'STREAM');
+        this.activeCriticalWorkers++;
+        if (this.metricsCollector) {
+          this.metricsCollector.setCriticalInFlight(this.activeCriticalWorkers);
+        }
+        try {
+          await this.processSingleEvent(criticalEvent, 'STREAM');
+        } finally {
+          this.activeCriticalWorkers--;
+          if (this.metricsCollector) {
+            this.metricsCollector.setCriticalInFlight(this.activeCriticalWorkers);
+          }
+        }
         didWork = true;
         continue; // Immediately loop back to check critical queue again
       }
@@ -111,7 +129,12 @@ export class WorkerPool {
 
         case 'DEFER': {
           // Low-priority execution is held back to save CPU for critical work.
-          // We don't process low events here, allowing critical path zero contention.
+          if (this.queueManager.lowQueue.size() > 0 && Date.now() - this.lastDeferLog > 1200) {
+            this.lastDeferLog = Date.now();
+            if (this.metricsCollector) {
+              this.metricsCollector.recordDeferred('Queue pressure elevated: deferring non-critical execution to protect critical path');
+            }
+          }
           break;
         }
 
@@ -120,7 +143,23 @@ export class WorkerPool {
           const excess = this.queueManager.lowQueue.size() - Math.round(this.config.LOW_QUEUE_CAPACITY * this.config.DEFER_PRESSURE_THRESHOLD);
           if (excess > 0) {
             const countToShed = Math.min(excess, 50);
-            this.sheddingPolicy.executeShedding(countToShed, 'LOW_QUEUE_PRESSURE_CRITICAL_OVERLOAD');
+            const result = this.sheddingPolicy.executeShedding(countToShed, 'LOW_QUEUE_PRESSURE_CRITICAL_OVERLOAD');
+            if (result.entries.length > 0 && this.metricsCollector) {
+              const top = result.entries[0];
+              const now = Date.now();
+              const d = new Date(now);
+              const timeStr = `${d.toTimeString().split(' ')[0]}.${String(now % 1000).padStart(3, '0')}`;
+              this.metricsCollector.addActivityLog({
+                id: top.eventId,
+                type: top.type,
+                priority: top.priority,
+                strategy: 'SHED',
+                status: 'SHED',
+                reason: `Controlled shed: Dropped ${result.shedCount} low-priority logs to preserve capacity`,
+                timestamp: timeStr,
+                timestampMs: now,
+              });
+            }
           }
           break;
         }

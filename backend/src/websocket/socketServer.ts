@@ -3,6 +3,18 @@ import { Server as SocketIOServer } from 'socket.io';
 import { MetricsCollector } from '../metrics/metricsCollector.js';
 import { WorkerPool } from '../processing/workerPool.js';
 
+let globalIo: SocketIOServer | null = null;
+let globalMetricsCollector: MetricsCollector | null = null;
+let globalWorkerPool: WorkerPool | null = null;
+
+export function broadcastTelemetryNow(): void {
+  if (globalIo && globalMetricsCollector && globalWorkerPool) {
+    const snapshot = globalMetricsCollector.getSnapshot();
+    globalWorkerPool.setStrategy(snapshot.activeStrategy);
+    globalIo.emit('telemetry', snapshot);
+  }
+}
+
 export function setupSocketServer(
   httpServer: HttpServer,
   metricsCollector: MetricsCollector,
@@ -15,6 +27,10 @@ export function setupSocketServer(
     },
   });
 
+  globalIo = io;
+  globalMetricsCollector = metricsCollector;
+  globalWorkerPool = workerPool;
+
   io.on('connection', (socket) => {
     // Send immediate initial state
     const snapshot = metricsCollector.getSnapshot();
@@ -23,10 +39,7 @@ export function setupSocketServer(
 
   // Broadcast telemetry snapshot every 500ms
   setInterval(() => {
-    const snapshot = metricsCollector.getSnapshot();
-    // Synchronize worker pool strategy with adaptive engine strategy
-    workerPool.setStrategy(snapshot.activeStrategy);
-    io.emit('telemetry', snapshot);
+    broadcastTelemetryNow();
   }, 500);
 
   return io;

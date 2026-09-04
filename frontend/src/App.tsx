@@ -1,163 +1,172 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from 'recharts';
+import {
+  initSocket,
+  triggerStart,
+  triggerSpike,
+  triggerNormal,
+  triggerStop,
+  triggerReset,
+} from './services/socketClient.js';
+import { TelemetrySnapshot } from './types/telemetry.js';
 
 export const App: React.FC = () => {
-  // State variables for interactive simulation matching Stitch UI specifications
-  const [simulatorMode, setSimulatorMode] = useState<'NORMAL' | 'SPIKE' | 'STOPPED'>('NORMAL');
-  const [systemState, setSystemState] = useState<'NORMAL' | 'PRESSURED' | 'OVERLOADED' | 'EXTREME'>('NORMAL');
-  const [processingMode, setProcessingMode] = useState<'STREAM' | 'BATCH' | 'DEFER' | 'SHED'>('STREAM');
+  // Connection and live telemetry states
+  const [isConnected, setIsConnected] = useState<boolean>(false);
+  const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
+  const [isPending, setIsPending] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Traffic metrics
-  const [incomingRate, setIncomingRate] = useState('1,000');
-  const [throughputRate, setThroughputRate] = useState('950');
-  const [queuePressure, setQueuePressure] = useState(12);
-
-  // Critical event protection metrics
-  const [criticalReceived, setCriticalReceived] = useState('1,250');
-  const [criticalProcessed, setCriticalProcessed] = useState('1,225');
-  const [criticalQueued, setCriticalQueued] = useState('25');
-  const [criticalLost] = useState(0); // Invariant: Always 0
-
-  // Priority lanes queue depths
-  const [critQueueDepth, setCritQueueDepth] = useState('25');
-  const [highQueueDepth, setHighQueueDepth] = useState('140');
-  const [lowQueueDepth, setLowQueueDepth] = useState('2,340');
-
-  // Latency chart history data
-  const [latencyData, setLatencyData] = useState([
-    { time: '10:42:00', critical: 15, nonCritical: 18 },
-    { time: '10:42:05', critical: 14, nonCritical: 22 },
-    { time: '10:42:10', critical: 15, nonCritical: 25 },
-    { time: '10:42:15', critical: 16, nonCritical: 42 },
-    { time: '10:42:20', critical: 15, nonCritical: 78 },
-    { time: '10:42:25', critical: 15, nonCritical: 115 },
-    { time: '10:42:30', critical: 14, nonCritical: 140 },
-    { time: '10:42:35', critical: 15, nonCritical: 195 },
-    { time: '10:42:40', critical: 16, nonCritical: 230 },
-    { time: '10:42:45', critical: 15, nonCritical: 175 },
-    { time: '10:42:50', critical: 14, nonCritical: 85 },
-    { time: '10:42:55', critical: 15, nonCritical: 30 },
+  // Rolling latency history buffer (last 20 snapshots from live backend)
+  const [latencyData, setLatencyData] = useState<Array<{ time: string; critical: number; nonCritical: number }>>([
+    { time: '--:--', critical: 15, nonCritical: 18 },
   ]);
 
-  // Decision log entries
-  const [decisionLogs, setDecisionLogs] = useState([
-    {
-      id: '1',
-      type: 'Checkout_Complete',
-      priority: 'CRITICAL',
-      strategy: 'STREAM',
-      reason: 'Standard priority routing',
-      timestamp: '10:42:01.450',
-    },
-    {
-      id: '2',
-      type: 'Payment_Authorization',
-      priority: 'CRITICAL',
-      strategy: 'STREAM',
-      reason: 'Dedicated transaction path',
-      timestamp: '10:42:01.448',
-    },
-    {
-      id: '3',
-      type: 'Inventory_Update',
-      priority: 'HIGH',
-      strategy: 'STREAM',
-      reason: 'Standard routing',
-      timestamp: '10:42:01.442',
-    },
-    {
-      id: '4',
-      type: 'Page_View_Log',
-      priority: 'LOW',
-      strategy: 'DEFER',
-      reason: 'Queue pressure > 60%',
-      timestamp: '10:42:01.120',
-    },
-    {
-      id: '5',
-      type: 'User_Clickstream',
-      priority: 'LOW',
-      strategy: 'BATCH',
-      reason: 'Grouped into micro-batch (25 items)',
-      timestamp: '10:42:00.890',
-    },
-  ]);
+  // Connect to backend Socket.IO telemetry stream
+  useEffect(() => {
+    const cleanup = initSocket(
+      (data: TelemetrySnapshot) => {
+        setTelemetry(data);
 
-  // Simulation Trigger Handlers
-  const handleStartNormal = () => {
-    setSimulatorMode('NORMAL');
-    setSystemState('NORMAL');
-    setProcessingMode('STREAM');
-    setIncomingRate('1,000');
-    setThroughputRate('950');
-    setQueuePressure(12);
-    setCritQueueDepth('25');
-    setHighQueueDepth('140');
-    setLowQueueDepth('180');
-    setCriticalReceived('1,250');
-    setCriticalProcessed('1,225');
-    setCriticalQueued('25');
-    setLatencyData((prev) => prev.map((item) => ({ ...item, nonCritical: Math.min(item.nonCritical, 35) })));
-  };
-
-  const handleTriggerSpike = () => {
-    setSimulatorMode('SPIKE');
-    setSystemState('PRESSURED');
-    setProcessingMode('BATCH');
-    setIncomingRate('20,000');
-    setThroughputRate('18,500');
-    setQueuePressure(74);
-    setCritQueueDepth('18');
-    setHighQueueDepth('210');
-    setLowQueueDepth('2,340');
-    setCriticalReceived('5,420');
-    setCriticalProcessed('5,395');
-    setCriticalQueued('25');
-    setLatencyData((prev) =>
-      prev.map((item, idx) => ({
-        ...item,
-        critical: 15,
-        nonCritical: idx > 6 ? 180 + idx * 10 : item.nonCritical,
-      }))
+        // Record real latency history point
+        const date = new Date(data.timestamp);
+        const timeStr = date.toTimeString().split(' ')[0];
+        setLatencyData((prev) => {
+          const point = {
+            time: timeStr,
+            critical: data.criticalLatencyAvg > 0 ? data.criticalLatencyAvg : 15,
+            nonCritical: data.nonCriticalLatencyAvg > 0 ? data.nonCriticalLatencyAvg : 18,
+          };
+          // If first item was placeholder, replace it
+          if (prev.length === 1 && prev[0].time === '--:--') {
+            return [point];
+          }
+          const updated = [...prev, point];
+          return updated.length > 20 ? updated.slice(-20) : updated;
+        });
+      },
+      (connected: boolean) => {
+        setIsConnected(connected);
+        if (connected) {
+          setErrorMessage(null);
+        }
+      }
     );
 
-    // Add spike log entry
-    setDecisionLogs((prev) => [
-      {
-        id: Date.now().toString(),
-        type: 'Flash_Sale_Click_Surge',
-        priority: 'LOW',
-        strategy: 'BATCH',
-        reason: 'Spike rate ~20,000/min: micro-batching 25 events to preserve capacity',
-        timestamp: new Date().toLocaleTimeString() + '.012',
-      },
-      ...prev.slice(0, 4),
-    ]);
+    return cleanup;
+  }, []);
+
+  // Simulation API Trigger Handlers
+  const handleStartNormal = async () => {
+    try {
+      setIsPending(true);
+      setErrorMessage(null);
+      await triggerStart();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to start simulator');
+    } finally {
+      setIsPending(false);
+    }
   };
 
-  const handleReturnToNormal = () => {
-    setSimulatorMode('NORMAL');
-    setSystemState('NORMAL');
-    setProcessingMode('STREAM');
-    setIncomingRate('1,000');
-    setThroughputRate('1,000');
-    setQueuePressure(9);
-    setCritQueueDepth('4');
-    setHighQueueDepth('45');
-    setLowQueueDepth('90');
-    setCriticalReceived('6,800');
-    setCriticalProcessed('6,795');
-    setCriticalQueued('5');
-    setLatencyData((prev) => prev.map((item) => ({ ...item, critical: 15, nonCritical: 20 })));
+  const handleTriggerSpike = async () => {
+    try {
+      setIsPending(true);
+      setErrorMessage(null);
+      await triggerSpike();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to trigger spike');
+    } finally {
+      setIsPending(false);
+    }
   };
 
-  const handleStop = () => {
-    setSimulatorMode('STOPPED');
+  const handleReturnToNormal = async () => {
+    try {
+      setIsPending(true);
+      setErrorMessage(null);
+      await triggerNormal();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to return to normal');
+    } finally {
+      setIsPending(false);
+    }
   };
 
-  const handleReset = () => {
-    handleStartNormal();
+  const handleStop = async () => {
+    try {
+      setIsPending(true);
+      setErrorMessage(null);
+      await triggerStop();
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to stop simulator');
+    } finally {
+      setIsPending(false);
+    }
   };
+
+  const handleReset = async () => {
+    try {
+      setIsPending(true);
+      setErrorMessage(null);
+      await triggerReset();
+      setLatencyData([{ time: '--:--', critical: 15, nonCritical: 18 }]);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to reset pipeline');
+    } finally {
+      setIsPending(false);
+    }
+  };
+
+  // Derive values from real backend telemetry
+  const simulatorMode = telemetry?.simulatorMode ?? 'STOPPED';
+  const systemState = telemetry?.systemPressureState ?? 'NORMAL';
+  const processingMode = telemetry?.activeStrategy ?? 'STREAM';
+  const adaptiveReason = telemetry?.adaptiveReason ?? 'Nominal load: direct individual stream processing active.';
+
+  const incomingRate = telemetry ? telemetry.incomingRatePerMin.toLocaleString() : '0';
+  const throughputRate = telemetry ? telemetry.throughputPerMin.toLocaleString() : '0';
+  const queuePressure = telemetry ? Math.round(telemetry.lowQueuePressure * 100) : 0;
+
+  // Real critical event protection metrics (Calculated by backend)
+  const criticalReceived = telemetry ? telemetry.criticalReceived.toLocaleString() : '0';
+  const criticalProcessed = telemetry ? telemetry.criticalProcessed.toLocaleString() : '0';
+  const criticalQueued = telemetry ? telemetry.criticalQueueSize.toLocaleString() : '0';
+  const criticalLost = telemetry ? telemetry.criticalLost : 0;
+  const criticalShed = telemetry ? telemetry.criticalShed : 0;
+  const safetyViolations = telemetry ? telemetry.safetyViolations : 0;
+
+  // Queue depths
+  const critQueueDepth = telemetry ? telemetry.criticalQueueSize.toLocaleString() : '0';
+  const highQueueDepth = telemetry ? telemetry.highQueueSize.toLocaleString() : '0';
+  const lowQueueDepth = telemetry ? telemetry.lowQueueSize.toLocaleString() : '0';
+
+  const critCapPercent =
+    telemetry && telemetry.criticalQueueCapacity > 0
+      ? Math.min(100, Math.round((telemetry.criticalQueueSize / telemetry.criticalQueueCapacity) * 100))
+      : 0;
+  const highCapPercent =
+    telemetry && telemetry.highQueueCapacity > 0
+      ? Math.min(100, Math.round((telemetry.highQueueSize / telemetry.highQueueCapacity) * 100))
+      : 0;
+  const lowCapPercent =
+    telemetry && telemetry.lowQueueCapacity > 0
+      ? Math.min(100, Math.round((telemetry.lowQueueSize / telemetry.lowQueueCapacity) * 100))
+      : 0;
+
+  // Global capacity
+  const totalQueued =
+    (telemetry?.criticalQueueSize ?? 0) +
+    (telemetry?.highQueueSize ?? 0) +
+    (telemetry?.lowQueueSize ?? 0);
+  const totalCapacity =
+    (telemetry?.criticalQueueCapacity ?? 2000) +
+    (telemetry?.highQueueCapacity ?? 2000) +
+    (telemetry?.lowQueueCapacity ?? 3000);
+  const aggregatePressure = Math.min(100, Math.round((totalQueued / Math.max(1, totalCapacity)) * 100));
+
+  // Decision & activity logs from real backend
+  const decisionLogs = telemetry?.recentActivityLogs ?? [];
 
   return (
     <div className="bg-[#ffffff] text-[#131b2e] min-h-screen flex flex-col md:flex-row antialiased">
@@ -178,7 +187,6 @@ export const App: React.FC = () => {
 
         {/* Navigation Links */}
         <nav className="flex-1 flex flex-col gap-1">
-          {/* Active Tab: Dashboard */}
           <a
             className="flex items-center gap-3 px-3 py-2 bg-[#eaedff] text-[#004ac6] rounded-lg font-semibold text-xs transition-colors shadow-2xs"
             href="#"
@@ -258,6 +266,28 @@ export const App: React.FC = () => {
 
         {/* Main Canvas Padding */}
         <main className="flex-1 p-6 md:p-8 flex flex-col gap-6 max-w-7xl w-full mx-auto">
+          {/* Disconnection / Error Alerts */}
+          {!isConnected && (
+            <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg text-xs flex items-center justify-between shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[18px] text-amber-600">warning</span>
+                <span>Connecting to backend at <code className="font-mono font-bold">http://localhost:4000</code>... Showing last known telemetry.</span>
+              </div>
+            </div>
+          )}
+
+          {errorMessage && (
+            <div className="bg-rose-50 border border-rose-200 text-rose-800 px-4 py-3 rounded-lg text-xs flex items-center justify-between shadow-xs">
+              <div className="flex items-center gap-2">
+                <span className="material-symbols-outlined text-[18px] text-rose-600">error</span>
+                <span>{errorMessage}</span>
+              </div>
+              <button onClick={() => setErrorMessage(null)} className="text-rose-500 hover:text-rose-700 font-bold">
+                Dismiss
+              </button>
+            </div>
+          )}
+
           {/* Section 1: Header / Status */}
           <section className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white p-6 rounded-xl border border-[#e2e8f0] shadow-xs">
             <div>
@@ -270,16 +300,40 @@ export const App: React.FC = () => {
             </div>
             <div className="flex flex-wrap gap-2.5 items-center">
               {/* Live Badge */}
-              <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 rounded-full">
-                <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span className="text-xs font-bold text-emerald-800 uppercase font-mono tracking-wider">
-                  Live
-                </span>
-              </div>
+              {isConnected ? (
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 rounded-full">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span className="text-xs font-bold text-emerald-800 uppercase font-mono tracking-wider">
+                    ● LIVE
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 px-3 py-1 bg-rose-50 border border-rose-200 rounded-full">
+                  <div className="w-2 h-2 rounded-full bg-rose-500" />
+                  <span className="text-xs font-bold text-rose-800 uppercase font-mono tracking-wider">
+                    ● DISCONNECTED
+                  </span>
+                </div>
+              )}
+
               {/* System State */}
               <div className="px-3 py-1 bg-slate-50 border border-slate-200 rounded-full text-xs text-slate-700 font-mono">
-                System State: <span className="font-bold text-slate-900">{systemState}</span>
+                System State:{' '}
+                <span
+                  className={`font-bold ${
+                    systemState === 'NORMAL'
+                      ? 'text-emerald-700'
+                      : systemState === 'PRESSURED'
+                      ? 'text-blue-700'
+                      : systemState === 'OVERLOADED'
+                      ? 'text-amber-700'
+                      : 'text-rose-700'
+                  }`}
+                >
+                  {systemState}
+                </span>
               </div>
+
               {/* Processing Mode */}
               <div className="px-3 py-1 bg-blue-50 border border-blue-200 rounded-full text-xs text-blue-800 font-mono">
                 Processing Mode: <span className="font-bold text-blue-900">{processingMode}</span>
@@ -328,21 +382,30 @@ export const App: React.FC = () => {
                       ? 'bg-blue-500'
                       : 'bg-emerald-500'
                   }`}
-                  style={{ width: `${queuePressure}%` }}
+                  style={{ width: `${Math.min(100, Math.max(2, queuePressure))}%` }}
                 />
               </div>
             </div>
           </section>
 
-          {/* Section 3: Demo Controls */}
+          {/* Section 3: Simulation Controls */}
           <section className="bg-slate-50 p-6 rounded-xl border border-[#e2e8f0] shadow-xs">
-            <h3 className="text-sm font-bold text-[#131b2e] uppercase font-mono tracking-wider mb-4">
-              Simulation Controls
-            </h3>
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-sm font-bold text-[#131b2e] uppercase font-mono tracking-wider">
+                Simulation Controls
+              </h3>
+              {isPending && (
+                <span className="text-xs font-mono text-blue-600 flex items-center gap-1">
+                  <span className="material-symbols-outlined text-[16px] animate-spin">refresh</span>
+                  Applying change...
+                </span>
+              )}
+            </div>
             <div className="flex flex-wrap gap-3 items-center">
               <button
                 onClick={handleStartNormal}
-                className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all shadow-xs ${
+                disabled={isPending}
+                className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all shadow-xs disabled:opacity-50 ${
                   simulatorMode === 'NORMAL'
                     ? 'bg-blue-600 text-white ring-2 ring-blue-300'
                     : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
@@ -354,7 +417,8 @@ export const App: React.FC = () => {
               <div className="relative group">
                 <button
                   onClick={handleTriggerSpike}
-                  className={`px-5 py-2 rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 ${
+                  disabled={isPending}
+                  className={`px-5 py-2 rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 disabled:opacity-50 ${
                     simulatorMode === 'SPIKE'
                       ? 'bg-amber-600 text-white ring-4 ring-amber-200 animate-pulse'
                       : 'bg-amber-600 hover:bg-amber-700 text-white'
@@ -371,7 +435,8 @@ export const App: React.FC = () => {
 
               <button
                 onClick={handleReturnToNormal}
-                className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-100 transition-colors shadow-xs"
+                disabled={isPending}
+                className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-100 transition-colors shadow-xs disabled:opacity-50"
               >
                 Return to Normal
               </button>
@@ -380,14 +445,18 @@ export const App: React.FC = () => {
 
               <button
                 onClick={handleStop}
-                className="px-3.5 py-2 bg-white border border-rose-200 text-rose-700 rounded-lg text-xs font-semibold hover:bg-rose-50 transition-colors shadow-xs flex items-center gap-1"
+                disabled={isPending}
+                className={`px-3.5 py-2 bg-white border border-rose-200 text-rose-700 rounded-lg text-xs font-semibold hover:bg-rose-50 transition-colors shadow-xs flex items-center gap-1 disabled:opacity-50 ${
+                  simulatorMode === 'STOPPED' ? 'ring-2 ring-rose-200 font-bold' : ''
+                }`}
               >
                 <span className="material-symbols-outlined text-[16px]">stop_circle</span> Stop
               </button>
 
               <button
                 onClick={handleReset}
-                className="px-3.5 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-100 transition-colors shadow-xs flex items-center gap-1"
+                disabled={isPending}
+                className="px-3.5 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-100 transition-colors shadow-xs flex items-center gap-1 disabled:opacity-50"
               >
                 <span className="material-symbols-outlined text-[16px]">restart_alt</span> Reset
               </button>
@@ -408,7 +477,9 @@ export const App: React.FC = () => {
                 <p className="text-xs text-[#64748b]">Orders & Payments processing integrity monitor.</p>
                 <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 border border-emerald-200 rounded-full w-max">
                   <span className="material-symbols-outlined text-emerald-700 text-[16px]">check_circle</span>
-                  <span className="text-xs font-semibold text-emerald-800">Critical Events Protected</span>
+                  <span className="text-xs font-semibold text-emerald-800">
+                    Critical Events Protected (Shed: {criticalShed} | Violations: {safetyViolations})
+                  </span>
                 </div>
               </div>
 
@@ -458,7 +529,7 @@ export const App: React.FC = () => {
                   <div
                     className={`rounded-lg p-4 text-center transition-all ${
                       processingMode === 'STREAM'
-                        ? 'bg-blue-50 border-2 border-blue-400 shadow-xs'
+                        ? 'bg-blue-50 border-2 border-blue-400 shadow-xs ring-2 ring-blue-100'
                         : 'bg-white border border-slate-200 opacity-60'
                     }`}
                   >
@@ -483,7 +554,7 @@ export const App: React.FC = () => {
                   <div
                     className={`rounded-lg p-4 text-center transition-all ${
                       processingMode === 'BATCH'
-                        ? 'bg-blue-50 border-2 border-blue-400 shadow-xs'
+                        ? 'bg-blue-50 border-2 border-blue-400 shadow-xs ring-2 ring-blue-100'
                         : 'bg-white border border-slate-200 opacity-60'
                     }`}
                   >
@@ -508,7 +579,7 @@ export const App: React.FC = () => {
                   <div
                     className={`rounded-lg p-4 text-center transition-all ${
                       processingMode === 'DEFER'
-                        ? 'bg-amber-50 border-2 border-amber-400 shadow-xs'
+                        ? 'bg-amber-50 border-2 border-amber-400 shadow-xs ring-2 ring-amber-100'
                         : 'bg-white border border-slate-200 opacity-60'
                     }`}
                   >
@@ -533,7 +604,7 @@ export const App: React.FC = () => {
                   <div
                     className={`rounded-lg p-4 text-center transition-all ${
                       processingMode === 'SHED'
-                        ? 'bg-rose-50 border-2 border-rose-400 shadow-xs'
+                        ? 'bg-rose-50 border-2 border-rose-400 shadow-xs ring-2 ring-rose-100'
                         : 'bg-white border border-slate-200 opacity-60'
                     }`}
                   >
@@ -553,6 +624,14 @@ export const App: React.FC = () => {
                     </div>
                     <div className="text-[10px] text-slate-500 mt-0.5">Drop telemetry</div>
                   </div>
+                </div>
+
+                {/* Adaptive Engine Reason */}
+                <div className="mt-4 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-mono text-slate-700 flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[16px] text-blue-600 shrink-0">psychology</span>
+                  <span>
+                    <strong className="text-slate-900">Decision Engine:</strong> {adaptiveReason}
+                  </span>
                 </div>
               </section>
 
@@ -597,10 +676,10 @@ export const App: React.FC = () => {
                     {/* Destination Nodes */}
                     <div className="flex flex-col gap-2 z-10 shrink-0">
                       <div className="px-3 py-1.5 bg-emerald-50 border border-emerald-300 text-emerald-800 font-bold rounded shadow-2xs text-center text-[11px]">
-                        Orders
+                        Orders / Payments
                       </div>
                       <div className="px-3 py-1.5 bg-slate-100 border border-slate-300 text-slate-700 rounded shadow-2xs text-center text-[11px]">
-                        Analytics
+                        Analytics / Clicks
                       </div>
                     </div>
                   </div>
@@ -691,7 +770,10 @@ export const App: React.FC = () => {
                     <span className="text-lg font-bold text-slate-800">{critQueueDepth}</span>
                   </div>
                   <div className="w-full h-1.5 bg-slate-100 rounded-full mt-2 overflow-hidden">
-                    <div className="h-full bg-emerald-500 rounded-full" style={{ width: '5%' }} />
+                    <div
+                      className="h-full bg-emerald-500 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(2, critCapPercent)}%` }}
+                    />
                   </div>
                 </div>
 
@@ -711,7 +793,10 @@ export const App: React.FC = () => {
                     <span className="text-lg font-bold text-slate-800">{highQueueDepth}</span>
                   </div>
                   <div className="w-full h-1.5 bg-slate-100 rounded-full mt-2 overflow-hidden">
-                    <div className="h-full bg-blue-500 rounded-full" style={{ width: '25%' }} />
+                    <div
+                      className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(2, highCapPercent)}%` }}
+                    />
                   </div>
                 </div>
 
@@ -731,7 +816,10 @@ export const App: React.FC = () => {
                     <span className="text-lg font-bold text-slate-800">{lowQueueDepth}</span>
                   </div>
                   <div className="w-full h-1.5 bg-slate-100 rounded-full mt-2 overflow-hidden">
-                    <div className="h-full bg-purple-500 rounded-full" style={{ width: `${Math.min(100, queuePressure)}%` }} />
+                    <div
+                      className="h-full bg-purple-500 rounded-full transition-all duration-300"
+                      style={{ width: `${Math.max(2, lowCapPercent)}%` }}
+                    />
                   </div>
                 </div>
               </section>
@@ -745,9 +833,10 @@ export const App: React.FC = () => {
                   When aggregate queue depth exceeds 80%, Tier 3 traffic is automatically deferred to batch processing.
                 </p>
                 <div className="relative w-full h-3 bg-slate-100 rounded-full overflow-hidden mb-2">
-                  <div className="absolute top-0 left-0 h-full bg-emerald-400" style={{ width: '20%' }} />
-                  <div className="absolute top-0 left-[20%] h-full bg-blue-400" style={{ width: '15%' }} />
-                  <div className="absolute top-0 left-[35%] h-full bg-purple-400" style={{ width: `${queuePressure * 0.4}%` }} />
+                  <div
+                    className="absolute top-0 left-0 h-full bg-blue-500 transition-all duration-300"
+                    style={{ width: `${aggregatePressure}%` }}
+                  />
                   {/* Threshold marker (80%) */}
                   <div className="absolute top-0 left-[80%] h-full w-[2px] bg-rose-500 z-10" />
                 </div>
@@ -760,13 +849,15 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Section 10: Activity Log (Data Table from Stitch) */}
+          {/* Section 10: Activity Log (Real Data Table from Backend) */}
           <section className="bg-white rounded-xl border border-[#e2e8f0] shadow-xs overflow-hidden">
             <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
               <h3 className="text-sm font-bold text-[#131b2e] uppercase font-mono tracking-wider">
                 Decision Log
               </h3>
-              <span className="text-xs text-slate-400 font-mono">Recent routing audit entries</span>
+              <span className="text-xs text-slate-400 font-mono">
+                Real-time pipeline telemetry ({decisionLogs.length} events logged)
+              </span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
@@ -780,29 +871,49 @@ export const App: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {decisionLogs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="py-3 px-6 font-semibold text-slate-800">{log.type}</td>
-                      <td className="py-3 px-6">
-                        <span
-                          className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${
-                            log.priority === 'CRITICAL'
-                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                              : log.priority === 'HIGH'
-                              ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                              : 'bg-purple-100 text-purple-800 border border-purple-200'
-                          }`}
-                        >
-                          {log.priority}
-                        </span>
+                  {decisionLogs.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="py-8 text-center text-slate-400 font-mono">
+                        Pipeline idle. Click "Start Normal Load" or "Trigger 20x Spike" to generate live events.
                       </td>
-                      <td className="py-3 px-6">
-                        <span className="font-mono text-xs text-blue-600 font-bold">{log.strategy}</span>
-                      </td>
-                      <td className="py-3 px-6 text-slate-600 text-[11px]">{log.reason}</td>
-                      <td className="py-3 px-6 text-slate-400 text-right font-mono text-xs">{log.timestamp}</td>
                     </tr>
-                  ))}
+                  ) : (
+                    decisionLogs.map((log) => (
+                      <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3 px-6 font-semibold text-slate-800">{log.type}</td>
+                        <td className="py-3 px-6">
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${
+                              log.priority === 'CRITICAL'
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : log.priority === 'HIGH'
+                                ? 'bg-blue-100 text-blue-800 border border-blue-200'
+                                : 'bg-purple-100 text-purple-800 border border-purple-200'
+                            }`}
+                          >
+                            {log.priority}
+                          </span>
+                        </td>
+                        <td className="py-3 px-6">
+                          <span
+                            className={`font-mono text-xs font-bold ${
+                              log.strategy === 'STREAM'
+                                ? 'text-blue-600'
+                                : log.strategy === 'BATCH'
+                                ? 'text-indigo-600'
+                                : log.strategy === 'DEFER'
+                                ? 'text-amber-600'
+                                : 'text-rose-600'
+                            }`}
+                          >
+                            {log.strategy}
+                          </span>
+                        </td>
+                        <td className="py-3 px-6 text-slate-600 text-[11px]">{log.reason}</td>
+                        <td className="py-3 px-6 text-slate-400 text-right font-mono text-xs">{log.timestamp}</td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>

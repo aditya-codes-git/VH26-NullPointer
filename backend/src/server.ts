@@ -39,6 +39,7 @@ const workerPool = new WorkerPool(
   batchProcessor,
   sheddingPolicy
 );
+workerPool.registerMetricsCollector(metricsCollector);
 
 // Wire worker completion to metrics
 workerPool.setListeners(

@@ -12,12 +12,24 @@ export interface ShedLogEntry {
   timestamp: number;
 }
 
+export interface ActivityLogEntry {
+  id: string;
+  type: EventType;
+  priority: EventPriority;
+  strategy: ProcessingStrategy;
+  status: 'QUEUED' | 'PROCESSING' | 'PROCESSED' | 'DEFERRED' | 'SHED';
+  reason: string;
+  timestamp: string; // HH:mm:ss.SSS
+  timestampMs: number;
+}
+
 export interface TelemetrySnapshot {
   timestamp: number;
   systemStatus: 'IDLE' | 'RUNNING';
   simulatorMode: 'STOPPED' | 'NORMAL' | 'SPIKE';
   activeStrategy: ProcessingStrategy;
   systemPressureState: SystemPressureState;
+  adaptiveReason: string;
 
   // Rates
   incomingRatePerSec: number;
@@ -53,6 +65,7 @@ export interface TelemetrySnapshot {
   criticalProcessed: number;
   criticalShed: number;
   criticalLost: number;
+  criticalInFlight: number;
 
   highReceived: number;
   highProcessed: number;
@@ -68,8 +81,9 @@ export interface TelemetrySnapshot {
   // Admission Backpressure
   backpressureActive: boolean;
 
-  // Recent Shed Log
+  // Logs
   recentShedEvents: ShedLogEntry[];
+  recentActivityLogs: ActivityLogEntry[];
 }
 
 export interface BenchmarkMetrics {

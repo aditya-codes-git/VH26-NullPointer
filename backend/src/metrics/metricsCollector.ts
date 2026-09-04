@@ -1,4 +1,4 @@
-import { PipelineEvent, TelemetrySnapshot } from '../models/event.js';
+import { PipelineEvent, TelemetrySnapshot, ActivityLogEntry } from '../models/event.js';
 import { QueueManager } from '../queues/queueManager.js';
 import { SheddingPolicy } from '../backpressure/sheddingPolicy.js';
 import { BackpressureController } from '../backpressure/backpressureController.js';
@@ -19,6 +19,7 @@ export class MetricsCollector {
   public criticalReceived = 0;
   public criticalProcessed = 0;
   public criticalShed = 0; // Invariant check
+  public criticalInFlight = 0;
 
   public highReceived = 0;
   public highProcessed = 0;
@@ -38,6 +39,10 @@ export class MetricsCollector {
   private nonCriticalLatencies: number[] = [];
   private readonly maxLatencySamples = 500;
 
+  // Ring buffer for real-time activity and decision logs
+  private recentActivityLogs: ActivityLogEntry[] = [];
+  private readonly maxActivityLogs = 50;
+
   constructor(
     queueManager: QueueManager,
     sheddingPolicy: SheddingPolicy,
@@ -52,6 +57,24 @@ export class MetricsCollector {
 
   public registerSimulator(simulator: EventSimulator): void {
     this.simulator = simulator;
+  }
+
+  public setCriticalInFlight(count: number): void {
+    this.criticalInFlight = Math.max(0, count);
+  }
+
+  public addActivityLog(entry: ActivityLogEntry): void {
+    this.recentActivityLogs.unshift(entry);
+    if (this.recentActivityLogs.length > this.maxActivityLogs) {
+      this.recentActivityLogs.pop();
+    }
+  }
+
+  private formatTime(timestamp: number): string {
+    const d = new Date(timestamp);
+    const timeStr = d.toTimeString().split(' ')[0];
+    const ms = String(timestamp % 1000).padStart(3, '0');
+    return `${timeStr}.${ms}`;
   }
 
   public recordIncomingEvent(event: PipelineEvent): void {
@@ -83,11 +106,41 @@ export class MetricsCollector {
       if (this.criticalLatencies.length > this.maxLatencySamples) {
         this.criticalLatencies.shift();
       }
+      this.addActivityLog({
+        id: event.id,
+        type: event.type,
+        priority: 'CRITICAL',
+        strategy: 'STREAM',
+        status: 'PROCESSED',
+        reason: 'Protected single-event transaction path',
+        timestamp: this.formatTime(now),
+        timestampMs: now,
+      });
     } else {
       if (event.priority === 'HIGH') {
         this.highProcessed++;
+        this.addActivityLog({
+          id: event.id,
+          type: event.type,
+          priority: 'HIGH',
+          strategy: 'STREAM',
+          status: 'PROCESSED',
+          reason: 'High-priority business event stream',
+          timestamp: this.formatTime(now),
+          timestampMs: now,
+        });
       } else {
         this.lowProcessed++;
+        this.addActivityLog({
+          id: event.id,
+          type: event.type,
+          priority: 'LOW',
+          strategy: 'STREAM',
+          status: 'PROCESSED',
+          reason: 'Standard low-priority individual execution',
+          timestamp: this.formatTime(now),
+          timestampMs: now,
+        });
       }
       this.nonCriticalLatencies.push(latencyMs);
       if (this.nonCriticalLatencies.length > this.maxLatencySamples) {
@@ -97,6 +150,7 @@ export class MetricsCollector {
   }
 
   public recordBatchProcessed(events: PipelineEvent[], durationMs: number): void {
+    if (events.length === 0) return;
     const now = Date.now();
     this.batchedCount += events.length;
     this.totalProcessed += events.length;
@@ -110,10 +164,32 @@ export class MetricsCollector {
         this.nonCriticalLatencies.shift();
       }
     }
+
+    this.addActivityLog({
+      id: events[0].id,
+      type: events[0].type,
+      priority: 'LOW',
+      strategy: 'BATCH',
+      status: 'PROCESSED',
+      reason: `Micro-batched ${events.length} events (processed in ${durationMs}ms)`,
+      timestamp: this.formatTime(now),
+      timestampMs: now,
+    });
   }
 
-  public recordDeferred(): void {
+  public recordDeferred(reason = 'Queue pressure elevated: deferring non-critical execution to prioritize critical pipeline'): void {
+    const now = Date.now();
     this.deferredCount++;
+    this.addActivityLog({
+      id: `def_${Date.now().toString().slice(-6)}`,
+      type: 'CLICK',
+      priority: 'LOW',
+      strategy: 'DEFER',
+      status: 'DEFERRED',
+      reason,
+      timestamp: this.formatTime(now),
+      timestampMs: now,
+    });
   }
 
   public getRates(): { incomingPerSec: number; processedPerSec: number } {
@@ -159,9 +235,10 @@ export class MetricsCollector {
     const nonCritLat = this.calculatePercentiles(this.nonCriticalLatencies);
 
     // Calculated Critical Lost dynamically:
-    // Critical Lost = Received - (Processed + Currently in Queue)
+    // Critical Lost = Received - (Processed + InQueue + InFlight)
     const criticalInQueue = this.queueManager.criticalQueue.size();
-    const calculatedCriticalLost = Math.max(0, this.criticalReceived - (this.criticalProcessed + criticalInQueue));
+    const criticalAccountedFor = this.criticalProcessed + criticalInQueue + this.criticalInFlight;
+    const calculatedCriticalLost = Math.max(0, this.criticalReceived - criticalAccountedFor);
 
     return {
       timestamp: now,
@@ -169,6 +246,7 @@ export class MetricsCollector {
       simulatorMode: this.simulator?.getMode() || 'STOPPED',
       activeStrategy: evaluation.strategy,
       systemPressureState: evaluation.state,
+      adaptiveReason: evaluation.reason,
 
       incomingRatePerSec: incomingPerSec,
       incomingRatePerMin: incomingPerSec * 60,
@@ -200,6 +278,7 @@ export class MetricsCollector {
       criticalProcessed: this.criticalProcessed,
       criticalShed: this.criticalShed,
       criticalLost: calculatedCriticalLost,
+      criticalInFlight: this.criticalInFlight,
 
       highReceived: this.highReceived,
       highProcessed: this.highProcessed,
@@ -214,6 +293,7 @@ export class MetricsCollector {
 
       backpressureActive: this.backpressureController.isActive(),
       recentShedEvents: this.sheddingPolicy.getRecentLogs(),
+      recentActivityLogs: [...this.recentActivityLogs],
     };
   }
 
@@ -223,6 +303,7 @@ export class MetricsCollector {
     this.criticalReceived = 0;
     this.criticalProcessed = 0;
     this.criticalShed = 0;
+    this.criticalInFlight = 0;
     this.highReceived = 0;
     this.highProcessed = 0;
     this.lowReceived = 0;
@@ -233,6 +314,7 @@ export class MetricsCollector {
     this.processedTimestamps = [];
     this.criticalLatencies = [];
     this.nonCriticalLatencies = [];
+    this.recentActivityLogs = [];
     this.sheddingPolicy.clear();
     this.queueManager.clearAll();
   }

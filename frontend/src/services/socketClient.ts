@@ -3,40 +3,70 @@ import { TelemetrySnapshot, BenchmarkComparison } from '../types/telemetry.js';
 
 let socket: Socket | null = null;
 
-export function initSocket(onTelemetry: (data: TelemetrySnapshot) => void): () => void {
-  socket = io('http://localhost:4000');
+export function initSocket(
+  onTelemetry: (data: TelemetrySnapshot) => void,
+  onConnectionChange?: (connected: boolean) => void
+): () => void {
+  socket = io('http://localhost:4000', {
+    transports: ['websocket', 'polling'],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+  });
+
+  socket.on('connect', () => {
+    onConnectionChange?.(true);
+  });
+
+  socket.on('disconnect', () => {
+    onConnectionChange?.(false);
+  });
+
+  socket.on('connect_error', () => {
+    onConnectionChange?.(false);
+  });
 
   socket.on('telemetry', (data: TelemetrySnapshot) => {
     onTelemetry(data);
   });
 
+  if (socket.connected) {
+    onConnectionChange?.(true);
+  }
+
   return () => {
     socket?.disconnect();
+    socket = null;
   };
 }
 
 export async function triggerStart(): Promise<any> {
   const res = await fetch('http://localhost:4000/api/simulator/start', { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to start simulator: ${res.statusText}`);
   return res.json();
 }
 
 export async function triggerSpike(): Promise<any> {
   const res = await fetch('http://localhost:4000/api/simulator/spike', { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to trigger spike: ${res.statusText}`);
   return res.json();
 }
 
 export async function triggerNormal(): Promise<any> {
   const res = await fetch('http://localhost:4000/api/simulator/normal', { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to return to normal: ${res.statusText}`);
   return res.json();
 }
 
 export async function triggerStop(): Promise<any> {
   const res = await fetch('http://localhost:4000/api/simulator/stop', { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to stop simulator: ${res.statusText}`);
   return res.json();
 }
 
 export async function triggerReset(): Promise<any> {
   const res = await fetch('http://localhost:4000/api/simulator/reset', { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to reset pipeline: ${res.statusText}`);
   return res.json();
 }
 
