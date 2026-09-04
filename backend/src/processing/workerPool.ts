@@ -4,6 +4,7 @@ import { QueueManager } from '../queues/queueManager.js';
 import { BatchProcessor } from './batchProcessor.js';
 import { SheddingPolicy } from '../backpressure/sheddingPolicy.js';
 import { AdaptiveDecisionEngine } from '../decision-engine/adaptiveEngine.js';
+import { RetryController } from '../resilience/retryController.js';
 
 export interface WorkerEventResult {
   event: PipelineEvent;
@@ -19,6 +20,7 @@ export class WorkerPool {
   private batchProcessor: BatchProcessor;
   private sheddingPolicy: SheddingPolicy;
   private adaptiveEngine?: AdaptiveDecisionEngine;
+  private retryController?: RetryController;
   
   private isRunning = false;
   private activeStrategy: ProcessingStrategy = 'STREAM';
@@ -34,13 +36,19 @@ export class WorkerPool {
     queueManager: QueueManager,
     batchProcessor: BatchProcessor,
     sheddingPolicy: SheddingPolicy,
-    adaptiveEngine?: AdaptiveDecisionEngine
+    adaptiveEngine?: AdaptiveDecisionEngine,
+    retryController?: RetryController
   ) {
     this.config = config;
     this.queueManager = queueManager;
     this.batchProcessor = batchProcessor;
     this.sheddingPolicy = sheddingPolicy;
     this.adaptiveEngine = adaptiveEngine;
+    this.retryController = retryController;
+  }
+
+  public registerRetryController(controller: RetryController): void {
+    this.retryController = controller;
   }
 
   public registerAdaptiveEngine(engine: AdaptiveDecisionEngine): void {
@@ -72,7 +80,8 @@ export class WorkerPool {
     this.isRunning = true;
 
     for (let i = 0; i < this.config.WORKER_CONCURRENCY; i++) {
-      this.runWorkerLoop();
+      const workerId = `worker-${i + 1}`;
+      this.runWorkerLoop(workerId);
     }
   }
 
@@ -80,7 +89,7 @@ export class WorkerPool {
     this.isRunning = false;
   }
 
-  private async runWorkerLoop(): Promise<void> {
+  private async runWorkerLoop(workerId = 'worker-1'): Promise<void> {
     while (this.isRunning) {
       let didWork = false;
 
@@ -92,7 +101,7 @@ export class WorkerPool {
           this.metricsCollector.setCriticalInFlight(this.activeCriticalWorkers);
         }
         try {
-          await this.processSingleEvent(criticalEvent, 'STREAM');
+          await this.processSingleEvent(criticalEvent, 'STREAM', workerId);
         } finally {
           this.activeCriticalWorkers--;
           if (this.metricsCollector) {
@@ -106,7 +115,7 @@ export class WorkerPool {
       // STEP 2: Check High Queue (Inventory business state)
       const highEvent = this.queueManager.highQueue.dequeue();
       if (highEvent) {
-        await this.processSingleEvent(highEvent, 'STREAM');
+        await this.processSingleEvent(highEvent, 'STREAM', workerId);
         didWork = true;
         continue;
       }
@@ -116,7 +125,7 @@ export class WorkerPool {
         case 'STREAM': {
           const lowEvent = this.queueManager.lowQueue.dequeue();
           if (lowEvent) {
-            await this.processSingleEvent(lowEvent, 'STREAM');
+            await this.processSingleEvent(lowEvent, 'STREAM', workerId);
             didWork = true;
           }
           break;
@@ -127,8 +136,8 @@ export class WorkerPool {
           const batchSize = Math.min(targetBatchSize, this.queueManager.lowQueue.size());
           if (batchSize > 0) {
             const batch = this.queueManager.lowQueue.dequeueBatch(batchSize);
-            const result = await this.batchProcessor.processBatch(batch);
-            if (this.onBatchProcessed) {
+            const result = await this.batchProcessor.processBatch(batch, workerId);
+            if (this.onBatchProcessed && result.events.length > 0) {
               this.onBatchProcessed(result.events, result.durationMs);
             }
             didWork = true;
@@ -150,8 +159,8 @@ export class WorkerPool {
           const batchSize = Math.min(targetBatchSize, this.queueManager.lowQueue.size());
           if (batchSize > 0) {
             const batch = this.queueManager.lowQueue.dequeueBatch(batchSize);
-            const result = await this.batchProcessor.processBatch(batch);
-            if (this.onBatchProcessed) {
+            const result = await this.batchProcessor.processBatch(batch, workerId);
+            if (this.onBatchProcessed && result.events.length > 0) {
               this.onBatchProcessed(result.events, result.durationMs);
             }
             didWork = true;
@@ -166,8 +175,8 @@ export class WorkerPool {
           const batchSize = Math.min(targetBatchSize, this.queueManager.lowQueue.size());
           if (batchSize > 0) {
             const batch = this.queueManager.lowQueue.dequeueBatch(batchSize);
-            const result = await this.batchProcessor.processBatch(batch);
-            if (this.onBatchProcessed) {
+            const result = await this.batchProcessor.processBatch(batch, workerId);
+            if (this.onBatchProcessed && result.events.length > 0) {
               this.onBatchProcessed(result.events, result.durationMs);
             }
             didWork = true;
@@ -208,9 +217,31 @@ export class WorkerPool {
     }
   }
 
-  private async processSingleEvent(event: PipelineEvent, strategy: ProcessingStrategy): Promise<void> {
+  public async processSingleEvent(
+    event: PipelineEvent,
+    strategy: ProcessingStrategy,
+    workerId = 'worker-1'
+  ): Promise<void> {
     // Calibrated simulated service time (e.g. 7ms per event)
     await new Promise((resolve) => setTimeout(resolve, this.config.BASE_PROCESSING_DELAY_MS));
+
+    // Check for simulated worker processing failure
+    if (this.retryController && this.retryController.shouldSimulateFailure(event)) {
+      this.retryController.handleFailedEvent(
+        event,
+        workerId,
+        `Worker ${workerId} simulated failure during processing`
+      );
+      return;
+    }
+
+    // Idempotent business side effect simulation
+    if (this.retryController) {
+      this.retryController.applySideEffect(event, workerId);
+      if ((event.retryCount || 0) > 0) {
+        this.retryController.recordRecoverySuccess(event, workerId);
+      }
+    }
 
     const now = Date.now();
     event.processedAt = now;
@@ -223,3 +254,4 @@ export class WorkerPool {
     }
   }
 }
+

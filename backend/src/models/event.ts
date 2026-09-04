@@ -4,7 +4,15 @@ export type EventPriority = 'CRITICAL' | 'HIGH' | 'LOW';
 
 export type ProcessingStrategy = 'STREAM' | 'BATCH' | 'DEFER' | 'SHED' | 'DEFER + SHED';
 
-export type EventStatus = 'QUEUED' | 'PROCESSING' | 'PROCESSED' | 'DEFERRED' | 'SHED';
+export type EventStatus =
+  | 'QUEUED'
+  | 'PROCESSING'
+  | 'PROCESSED'
+  | 'DEFERRED'
+  | 'SHED'
+  | 'FAILED'
+  | 'RETRYING'
+  | 'PERMANENT_FAILURE';
 
 export interface PipelineEvent {
   id: string;
@@ -17,6 +25,50 @@ export interface PipelineEvent {
   strategy?: ProcessingStrategy;
   status: EventStatus;
   dropReason?: string;
+  retryCount?: number;
+  lastFailureReason?: string;
+}
+
+export interface RecoveryAuditEntry {
+  id: string;
+  eventId: string;
+  type: EventType;
+  priority: EventPriority;
+  workerId: string;
+  attempt: number;
+  retryNumber?: number;
+  status: 'FAILED' | 'ISOLATED' | 'RETRYING' | 'SUCCESS' | 'PERMANENT_FAILURE';
+  failureReason: string;
+  timestamp: string; // HH:mm:ss.SSS
+  timestampMs: number;
+}
+
+export interface RecoveryEventSummary {
+  eventId: string;
+  type: EventType;
+  priority: EventPriority;
+  lastWorkerId: string;
+  totalAttempts: number;
+  retriesCount: number;
+  outcome: 'RECOVERED' | 'PERMANENT_FAILURE' | 'RECOVERING' | 'FAILED';
+  lastStatus: 'FAILED' | 'ISOLATED' | 'RETRYING' | 'SUCCESS' | 'PERMANENT_FAILURE';
+  lastUpdated: string;
+  lastUpdatedMs: number;
+  lifecycle: RecoveryAuditEntry[];
+}
+
+export interface FaultToleranceTelemetry {
+  retryAttempts: number;
+  retrySuccesses: number;
+  retryFailures: number;
+  permanentFailures: number;
+  duplicatesPrevented: number;
+  failureArmed: boolean;
+  lastFailure: RecoveryAuditEntry | null;
+  lastRetry: RecoveryAuditEntry | null;
+  lastRecovery: RecoveryAuditEntry | null;
+  recentRecoveries: RecoveryAuditEntry[];
+  recoveryEvents: RecoveryEventSummary[];
 }
 
 export interface ShedLogEntry {
@@ -184,6 +236,7 @@ export interface TelemetrySnapshot {
   shedding: SheddingTelemetry;
   batching: BatchingTelemetry;
   adaptive: AdaptiveTelemetry;
+  faultTolerance: FaultToleranceTelemetry;
 
   // Logs
   recentShedEvents: ShedLogEntry[];

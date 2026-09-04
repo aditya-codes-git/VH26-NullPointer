@@ -10,6 +10,7 @@ import { BackpressureController } from './backpressure/backpressureController.js
 import { AdaptiveDecisionEngine } from './decision-engine/adaptiveEngine.js';
 import { WorkerPool } from './processing/workerPool.js';
 import { MetricsCollector } from './metrics/metricsCollector.js';
+import { RetryController } from './resilience/retryController.js';
 import { EventSimulator } from './simulator/eventSimulator.js';
 import { createApiRouter } from './api/routes.js';
 import { setupSocketServer } from './websocket/socketServer.js';
@@ -23,7 +24,8 @@ app.use(express.json());
 
 const config = { ...DEFAULT_CONFIG };
 const queueManager = new QueueManager(config);
-const batchProcessor = new BatchProcessor(config);
+const retryController = new RetryController(config, queueManager);
+const batchProcessor = new BatchProcessor(config, retryController);
 const sheddingPolicy = new SheddingPolicy(queueManager);
 const backpressureController = new BackpressureController(config, queueManager);
 const adaptiveEngine = new AdaptiveDecisionEngine(config, queueManager);
@@ -32,7 +34,8 @@ const metricsCollector = new MetricsCollector(
   queueManager,
   sheddingPolicy,
   backpressureController,
-  adaptiveEngine
+  adaptiveEngine,
+  retryController
 );
 
 const priorityRouter = new PriorityRouter(
@@ -46,7 +49,8 @@ const workerPool = new WorkerPool(
   queueManager,
   batchProcessor,
   sheddingPolicy,
-  adaptiveEngine
+  adaptiveEngine,
+  retryController
 );
 workerPool.registerMetricsCollector(metricsCollector);
 
@@ -81,7 +85,7 @@ backpressureController.registerSimulator(simulator);
 workerPool.start();
 
 // Mount API routes (including POST /api/ingest)
-app.use('/api', createApiRouter(simulator, metricsCollector, config, kafkaProducer));
+app.use('/api', createApiRouter(simulator, metricsCollector, config, kafkaProducer, retryController));
 
 const httpServer = createServer(app);
 setupSocketServer(httpServer, metricsCollector, workerPool);

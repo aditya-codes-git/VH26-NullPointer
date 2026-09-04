@@ -6,12 +6,14 @@ import { PipelineConfig } from '../config/pipelineConfig.js';
 import { broadcastTelemetryNow } from '../websocket/socketServer.js';
 import { KafkaEventProducer } from '../kafka/producer.js';
 import { getKafkaStatus, isProducerReady, KAFKA_CONFIG } from '../kafka/kafkaClient.js';
+import { RetryController } from '../resilience/retryController.js';
 
 export function createApiRouter(
   simulator: EventSimulator,
   metricsCollector: MetricsCollector,
   config: PipelineConfig,
-  kafkaProducer?: KafkaEventProducer
+  kafkaProducer?: KafkaEventProducer,
+  retryController?: RetryController
 ): Router {
   const router = Router();
 
@@ -158,6 +160,32 @@ export function createApiRouter(
 
   router.get('/config', (_req, res) => {
     res.json(config);
+  });
+
+  // ==========================================================
+  // Stretch Goal 1: Fault Tolerance with Idempotent Retry Demo
+  // ==========================================================
+  router.post('/demo/failure', (req, res) => {
+    if (!retryController) {
+      return res.status(500).json({ error: 'RetryController not registered on API router' });
+    }
+    const targetType = req.body?.type;
+    const mode = req.body?.mode || 'single';
+    retryController.armFailure(targetType, mode);
+    broadcastTelemetryNow();
+    res.json({
+      armed: true,
+      mode,
+      message: `Worker failure simulation armed (mode: ${mode}) for next eligible event`,
+      targetType: targetType || 'ANY',
+    });
+  });
+
+  router.get('/demo/fault-tolerance', (_req, res) => {
+    if (!retryController) {
+      return res.status(500).json({ error: 'RetryController not registered' });
+    }
+    res.json(retryController.getTelemetry());
   });
 
   return router;

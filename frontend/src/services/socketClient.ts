@@ -88,3 +88,17 @@ export async function runBenchmark(eventCount = 1500): Promise<BenchmarkComparis
   });
   return res.json();
 }
+
+export async function triggerSimulateFailure(
+  type?: string,
+  mode: 'single' | 'multi' | 'permanent' = 'single'
+): Promise<{ armed: boolean; message: string; targetType: string; mode: string }> {
+  const res = await fetch('http://localhost:4000/api/demo/failure', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type, mode }),
+  });
+  if (!res.ok) throw new Error(`Failed to simulate failure: ${res.statusText}`);
+  return res.json();
+}
+

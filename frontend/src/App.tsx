@@ -18,6 +18,7 @@ import {
   triggerReset,
 } from './services/socketClient.js';
 import { TelemetrySnapshot } from './types/telemetry.js';
+import { FaultToleranceSection } from './components/FaultToleranceSection.js';
 
 export const App: React.FC = () => {
   // Connection and live telemetry states
@@ -276,10 +277,17 @@ export const App: React.FC = () => {
         <nav className="flex-1 flex flex-col gap-1">
           <a
             className="flex items-center gap-3 px-3 py-2 bg-[#eaedff] text-[#004ac6] rounded-lg font-semibold text-xs transition-colors shadow-2xs"
-            href="#"
+            href="#dashboard"
           >
             <span className="material-symbols-outlined text-[20px]">dashboard</span>
             <span>Dashboard</span>
+          </a>
+          <a
+            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
+            href="#fault-tolerance"
+          >
+            <span className="material-symbols-outlined text-[20px] text-rose-500">health_and_safety</span>
+            <span className="font-semibold text-slate-800">Fault Tolerance</span>
           </a>
           <a
             className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
@@ -1119,6 +1127,14 @@ export const App: React.FC = () => {
                 </ResponsiveContainer>
               </div>
             </section>
+          </div>
+
+          {/* Section: Fault Tolerance with Idempotent Retry (Stretch Goal 1) */}
+          <div id="fault-tolerance">
+            <FaultToleranceSection
+              faultTolerance={telemetry?.faultTolerance}
+              disabled={isPending}
+            />
           </div>
 
           {/* Section 8: Event Accounting & Invariant Reconciliation */}

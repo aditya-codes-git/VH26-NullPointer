@@ -33,6 +33,10 @@ export interface PipelineConfig {
   
   // Fair scheduling ratio: under normal/moderate pressure, worker picks critical vs non-critical
   CRITICAL_WORKER_RATIO: number; // 0.80 (80% critical if available, 20% non-critical to avoid starvation)
+
+  // Fault Tolerance & Retry Configuration
+  MAX_RETRIES: number;
+  RETRY_BACKOFF_BASE_MS: number;
 }
 
 export const DEFAULT_CONFIG: PipelineConfig = {
@@ -65,4 +69,7 @@ export const DEFAULT_CONFIG: PipelineConfig = {
   
   WORKER_CONCURRENCY: 2, // 2 active worker loops (~280 events/sec max stream capacity)
   CRITICAL_WORKER_RATIO: 0.80,
+
+  MAX_RETRIES: 3,
+  RETRY_BACKOFF_BASE_MS: 100,
 };

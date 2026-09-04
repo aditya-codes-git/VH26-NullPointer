@@ -4,12 +4,14 @@ import { SheddingPolicy } from '../backpressure/sheddingPolicy.js';
 import { BackpressureController } from '../backpressure/backpressureController.js';
 import { AdaptiveDecisionEngine, SystemPressureState } from '../decision-engine/adaptiveEngine.js';
 import { EventSimulator } from '../simulator/eventSimulator.js';
+import { RetryController } from '../resilience/retryController.js';
 
 export class MetricsCollector {
   private queueManager: QueueManager;
   private sheddingPolicy: SheddingPolicy;
   private backpressureController: BackpressureController;
   private adaptiveEngine: AdaptiveDecisionEngine;
+  private retryController?: RetryController;
   private simulator: EventSimulator | null = null;
 
   // Counters
@@ -58,12 +60,18 @@ export class MetricsCollector {
     queueManager: QueueManager,
     sheddingPolicy: SheddingPolicy,
     backpressureController: BackpressureController,
-    adaptiveEngine: AdaptiveDecisionEngine
+    adaptiveEngine: AdaptiveDecisionEngine,
+    retryController?: RetryController
   ) {
     this.queueManager = queueManager;
     this.sheddingPolicy = sheddingPolicy;
     this.backpressureController = backpressureController;
     this.adaptiveEngine = adaptiveEngine;
+    this.retryController = retryController;
+  }
+
+  public registerRetryController(controller: RetryController): void {
+    this.retryController = controller;
   }
 
   public registerSimulator(simulator: EventSimulator): void {
@@ -439,6 +447,20 @@ export class MetricsCollector {
       shedding: sheddingTelemetry,
       batching: batchingTelemetry,
       adaptive: adaptiveTelemetry,
+      faultTolerance: this.retryController
+        ? this.retryController.getTelemetry()
+        : {
+            retryAttempts: 0,
+            retrySuccesses: 0,
+            retryFailures: 0,
+            permanentFailures: 0,
+            duplicatesPrevented: 0,
+            failureArmed: false,
+            lastFailure: null,
+            lastRetry: null,
+            lastRecovery: null,
+            recentRecoveries: [],
+          },
 
       recentShedEvents: this.sheddingPolicy.getRecentLogs(),
       recentActivityLogs: [...this.recentActivityLogs],
@@ -469,5 +491,8 @@ export class MetricsCollector {
     this.batchSizeHistory = [];
     this.sheddingPolicy.clear();
     this.queueManager.clearAll();
+    if (this.retryController) {
+      this.retryController.reset();
+    }
   }
 }
