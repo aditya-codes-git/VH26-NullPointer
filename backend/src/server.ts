@@ -15,6 +15,7 @@ import { createApiRouter } from './api/routes.js';
 import { setupSocketServer } from './websocket/socketServer.js';
 import { KafkaEventProducer } from './kafka/producer.js';
 import { KafkaEventConsumer } from './kafka/consumer.js';
+import { ensureTopicExists, KAFKA_CONFIG } from './kafka/kafkaClient.js';
 
 const app = express();
 app.use(cors());
@@ -83,13 +84,37 @@ app.use('/api', createApiRouter(simulator, metricsCollector, config, kafkaProduc
 const httpServer = createServer(app);
 setupSocketServer(httpServer, metricsCollector, workerPool);
 
-// Start Kafka connectivity in background (non-blocking)
-kafkaProducer.start().catch((err) => {
-  console.log(`[KAFKA PRODUCER] Standalone mode: broker offline (${err.message})`);
-});
-kafkaConsumer.start().catch((err) => {
-  console.log(`[KAFKA CONSUMER] Standalone mode: broker offline (${err.message})`);
-});
+// Start Kafka connectivity with strict sequencing and robust retry
+async function startKafkaSubsystem(retries = 10, delayMs = 3000): Promise<void> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`[KAFKA] Initializing Kafka subsystem (attempt ${attempt}/${retries})...`);
+
+      // 1. Connect Producer
+      await kafkaProducer.start();
+
+      // 2. Ensure topic exists with 3 partitions and partition metadata is ready
+      await ensureTopicExists(KAFKA_CONFIG.topic, 3);
+
+      // 3. Connect Consumer and join consumer group
+      await kafkaConsumer.start();
+
+      console.log(
+        `[KAFKA] Subsystem fully initialized: Producer ready, topic '${KAFKA_CONFIG.topic}' ready, consumer joined '${KAFKA_CONFIG.groupId}'.`
+      );
+      return;
+    } catch (err: any) {
+      console.warn(`[KAFKA] Subsystem init attempt ${attempt} failed: ${err.message}`);
+      if (attempt < retries) {
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      } else {
+        console.error(`[KAFKA] Could not connect to Kafka after ${retries} attempts. Running in standalone fallback mode.`);
+      }
+    }
+  }
+}
+
+startKafkaSubsystem().catch(() => {});
 
 const PORT = process.env.PORT || 4000;
 httpServer.listen(PORT, () => {

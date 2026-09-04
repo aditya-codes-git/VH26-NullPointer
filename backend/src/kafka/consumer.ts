@@ -11,6 +11,7 @@ export class KafkaEventConsumer {
   private metricsCollector: MetricsCollector;
   private consumedCount = 0;
   private isRunning = false;
+  private isJoined = false;
 
   constructor(priorityRouter: PriorityRouter, metricsCollector: MetricsCollector) {
     this.priorityRouter = priorityRouter;
@@ -19,23 +20,57 @@ export class KafkaEventConsumer {
       groupId: KAFKA_CONFIG.groupId,
       retry: {
         initialRetryTime: 300,
-        retries: 5,
+        retries: 8,
       },
+    });
+
+    this.registerEventListeners();
+  }
+
+  private registerEventListeners(): void {
+    // Strictly mark consumerReady = true ONLY when Kafka confirms group join
+    this.consumer.on(this.consumer.events.GROUP_JOIN, (event) => {
+      this.isJoined = true;
+      setKafkaState({ consumerReady: true });
+      console.log(
+        `[KAFKA CONSUMER] Joined group '${event.payload.groupId}' (member: ${event.payload.memberId}) | Partitions: ${JSON.stringify(event.payload.memberAssignment)}`
+      );
+    });
+
+    this.consumer.on(this.consumer.events.CRASH, (event) => {
+      this.isJoined = false;
+      setKafkaState({ consumerReady: false });
+      console.error(`[KAFKA CONSUMER] Consumer crashed: ${event.payload.error?.message}`);
+    });
+
+    this.consumer.on(this.consumer.events.DISCONNECT, () => {
+      this.isJoined = false;
+      setKafkaState({ consumerReady: false });
+      console.log('[KAFKA CONSUMER] Disconnected from broker');
+    });
+
+    this.consumer.on(this.consumer.events.STOP, () => {
+      this.isJoined = false;
+      setKafkaState({ consumerReady: false });
     });
   }
 
   public async start(): Promise<void> {
+    if (this.isRunning) return;
+
     try {
+      console.log(`[KAFKA CONSUMER] Connecting to broker...`);
       await this.consumer.connect();
+
+      console.log(`[KAFKA CONSUMER] Subscribing to topic '${KAFKA_CONFIG.topic}'...`);
       await this.consumer.subscribe({
         topic: KAFKA_CONFIG.topic,
         fromBeginning: false,
       });
 
-      setKafkaState({ consumerReady: true });
       this.isRunning = true;
-      console.log(`[KAFKA CONSUMER] Connected & subscribed to '${KAFKA_CONFIG.topic}' (group: ${KAFKA_CONFIG.groupId})`);
 
+      // Start message consumption loop (KafkaJS joins group asynchronously)
       await this.consumer.run({
         eachMessage: async ({ topic, partition, message }) => {
           if (!message.value) return;
@@ -60,7 +95,7 @@ export class KafkaEventConsumer {
 
             // 2. Sampled logging for high-volume scenarios
             if (this.consumedCount <= 5 || this.consumedCount % 250 === 0) {
-              console.log(`[KAFKA CONSUMER] Consumed ${pipelineEvent.id} (${pipelineEvent.type})`);
+              console.log(`[KAFKA CONSUMER] Consumed ${pipelineEvent.id} (${pipelineEvent.type}) from partition ${partition}`);
               console.log(`[PIPELINE] ${pipelineEvent.id} → ${pipelineEvent.priority}`);
             }
 
@@ -74,9 +109,26 @@ export class KafkaEventConsumer {
           }
         },
       });
+
+      // Wait until the group join has actually occurred before returning
+      await this.waitForGroupJoin(10000);
+      console.log(`[KAFKA CONSUMER] Connected & joined '${KAFKA_CONFIG.groupId}' on '${KAFKA_CONFIG.topic}'`);
     } catch (err: any) {
+      this.isRunning = false;
+      this.isJoined = false;
       setKafkaState({ consumerReady: false });
-      console.error(`[KAFKA CONSUMER] Failed to connect/start consumer: ${err.message}`);
+      console.error(`[KAFKA CONSUMER] Failed to start/join group: ${err.message}`);
+      throw err;
+    }
+  }
+
+  private async waitForGroupJoin(timeoutMs = 10000): Promise<void> {
+    const start = Date.now();
+    while (!this.isJoined && Date.now() - start < timeoutMs) {
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    if (!this.isJoined) {
+      throw new Error(`Consumer did not receive GROUP_JOIN for '${KAFKA_CONFIG.groupId}' within ${timeoutMs}ms`);
     }
   }
 
@@ -84,6 +136,7 @@ export class KafkaEventConsumer {
     if (!this.isRunning) return;
     try {
       this.isRunning = false;
+      this.isJoined = false;
       await this.consumer.disconnect();
       setKafkaState({ consumerReady: false });
       console.log('[KAFKA CONSUMER] Disconnected');
@@ -96,3 +149,4 @@ export class KafkaEventConsumer {
     return this.consumedCount;
   }
 }
+

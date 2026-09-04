@@ -1,4 +1,4 @@
-import { Producer } from 'kafkajs';
+import { Producer, Partitioners } from 'kafkajs';
 import { kafka, KAFKA_CONFIG, setKafkaState, isProducerReady } from './kafkaClient.js';
 
 export interface IngestionEventPayload {
@@ -15,6 +15,7 @@ export class KafkaEventProducer {
 
   constructor() {
     this.producer = kafka.producer({
+      createPartitioner: Partitioners.DefaultPartitioner,
       allowAutoTopicCreation: true,
       transactionTimeout: 30000,
     });
@@ -28,6 +29,7 @@ export class KafkaEventProducer {
     } catch (err: any) {
       setKafkaState({ producerReady: false });
       console.error(`[KAFKA PRODUCER] Failed to connect to Kafka brokers: ${err.message}`);
+      throw err;
     }
   }
 

@@ -49,3 +49,29 @@ export function isProducerReady(): boolean {
 export function isConsumerReady(): boolean {
   return status.consumerReady;
 }
+
+export async function ensureTopicExists(topic: string, partitions = 3): Promise<void> {
+  const admin = kafka.admin();
+  try {
+    await admin.connect();
+    const existingTopics = await admin.listTopics();
+    if (!existingTopics.includes(topic)) {
+      console.log(`[KAFKA ADMIN] Creating topic '${topic}' with ${partitions} partitions...`);
+      await admin.createTopics({
+        topics: [
+          {
+            topic,
+            numPartitions: partitions,
+            replicationFactor: 1,
+          },
+        ],
+        waitForLeaders: true,
+      });
+      console.log(`[KAFKA ADMIN] Topic '${topic}' created successfully.`);
+    }
+    // Verify partition leader metadata is available
+    await admin.fetchTopicMetadata({ topics: [topic] });
+  } finally {
+    await admin.disconnect().catch(() => {});
+  }
+}

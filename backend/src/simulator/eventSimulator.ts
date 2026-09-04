@@ -5,7 +5,7 @@ import { PipelineConfig } from '../config/pipelineConfig.js';
 import { KafkaEventProducer } from '../kafka/producer.js';
 import { isProducerReady } from '../kafka/kafkaClient.js';
 
-export type SimulatorMode = 'STOPPED' | 'NORMAL' | 'SPIKE';
+export type SimulatorMode = 'STOPPED' | 'NORMAL' | 'SPIKE' | 'CUSTOM';
 
 export class EventSimulator {
   private mode: SimulatorMode = 'STOPPED';
@@ -14,6 +14,7 @@ export class EventSimulator {
   private onEventCallback: (event: PipelineEvent) => void;
   private kafkaProducer?: KafkaEventProducer;
   private isPausedByBackpressure = false;
+  private currentRatePerMin = 0;
 
   constructor(
     config: PipelineConfig,
@@ -33,6 +34,10 @@ export class EventSimulator {
     return this.mode;
   }
 
+  public getCurrentRate(): number {
+    return this.currentRatePerMin;
+  }
+
   public isPaused(): boolean {
     return this.isPausedByBackpressure;
   }
@@ -42,42 +47,65 @@ export class EventSimulator {
   }
 
   public startNormal(): void {
-    this.setMode('NORMAL');
+    this.setRate(this.config.NORMAL_RATE_PER_MIN);
   }
 
   public triggerSpike(): void {
-    this.setMode('SPIKE');
+    this.setRate(this.config.SPIKE_RATE_PER_MIN);
   }
 
   public stop(): void {
-    this.setMode('STOPPED');
+    this.setRate(0);
   }
 
   public setMode(mode: SimulatorMode): void {
-    this.mode = mode;
+    if (mode === 'NORMAL') {
+      this.startNormal();
+    } else if (mode === 'SPIKE') {
+      this.triggerSpike();
+    } else {
+      this.stop();
+    }
+  }
+
+  public setRate(eventsPerMin: number): void {
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
     }
 
-    if (mode === 'STOPPED') {
+    if (eventsPerMin <= 0) {
+      this.mode = 'STOPPED';
+      this.currentRatePerMin = 0;
       return;
     }
 
-    const eventsPerMin =
-      mode === 'SPIKE' ? this.config.SPIKE_RATE_PER_MIN : this.config.NORMAL_RATE_PER_MIN;
+    if (eventsPerMin === this.config.NORMAL_RATE_PER_MIN) {
+      this.mode = 'NORMAL';
+    } else if (eventsPerMin === this.config.SPIKE_RATE_PER_MIN) {
+      this.mode = 'SPIKE';
+    } else {
+      this.mode = 'CUSTOM';
+    }
 
-    // Emit events in tight intervals (50ms) to ensure realistic streaming
+    this.currentRatePerMin = eventsPerMin;
+
+    // Emit events in tight intervals (50ms) using fractional accumulation for accurate rate
     const intervalMs = 50;
-    const intervalsPerMinute = (60 * 1000) / intervalMs;
-    const eventsPerInterval = Math.max(1, Math.round(eventsPerMin / intervalsPerMinute));
+    const intervalsPerSec = 1000 / intervalMs;
+    const eventsPerIntervalFloat = (eventsPerMin / 60) / intervalsPerSec;
+    let accumulator = 0;
 
     this.timer = setInterval(() => {
       if (this.isPausedByBackpressure) {
         return; // Admission paused to protect system from saturation
       }
 
-      for (let i = 0; i < eventsPerInterval; i++) {
+      accumulator += eventsPerIntervalFloat;
+      const countToSend = Math.floor(accumulator);
+      accumulator -= countToSend;
+
+      for (let i = 0; i < countToSend; i++) {
         const event = this.generateRandomEvent();
 
         // If Kafka producer is connected, route through Kafka; otherwise fallback for demo resilience

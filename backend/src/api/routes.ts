@@ -97,7 +97,31 @@ export function createApiRouter(
     res.json({ message: 'Simulator started at normal rate (~1,000 events/min)', mode: 'NORMAL' });
   });
 
-  router.post('/simulator/spike', (_req, res) => {
+  router.post('/simulator/rate', (req, res) => {
+    const rate = Number(req.body?.rate ?? req.body?.eventsPerMin);
+    if (!rate || isNaN(rate) || rate < 100 || rate > 100000) {
+      return res.status(400).json({ error: 'Invalid rate. Must be a number between 100 and 100,000.' });
+    }
+    simulator.setRate(rate);
+    broadcastTelemetryNow();
+    res.json({
+      message: `Simulator rate set to ${rate.toLocaleString()} events/min`,
+      rate,
+      mode: simulator.getMode(),
+    });
+  });
+
+  router.post('/simulator/spike', (req, res) => {
+    const customRate = Number(req.body?.rate ?? req.body?.eventsPerMin);
+    if (customRate && !isNaN(customRate) && customRate >= 100) {
+      simulator.setRate(customRate);
+      broadcastTelemetryNow();
+      return res.json({
+        message: `Traffic rate set to ${customRate.toLocaleString()} events/min`,
+        rate: customRate,
+        mode: simulator.getMode(),
+      });
+    }
     simulator.triggerSpike();
     broadcastTelemetryNow();
     res.json({ message: '20x Flash-sale spike triggered (~20,000 events/min)', mode: 'SPIKE' });
