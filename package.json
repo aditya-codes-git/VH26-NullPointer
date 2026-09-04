@@ -1,0 +1,13 @@
+{
+  "name": "adaptive-event-pipeline",
+  "version": "1.0.0",
+  "description": "Adaptive Event-Processing Pipeline for E-Commerce Flash Sales",
+  "scripts": {
+    "backend:dev": "npm --prefix backend run dev",
+    "backend:build": "npm --prefix backend run build",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "test": "npm --prefix backend test",
+    "build": "npm --prefix backend run build && npm --prefix frontend run build"
+  }
+}
