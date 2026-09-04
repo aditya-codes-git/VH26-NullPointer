@@ -39,6 +39,53 @@ export interface ActivityLogEntry {
   timestampMs: number;
 }
 
+export interface QueueTelemetry {
+  size: number;
+  capacity: number;
+  pressure: number;
+  pressurePercent: number;
+  strategy: ProcessingStrategy;
+  status: string;
+  processedCount: number;
+  queuedCount: number;
+}
+
+export interface BatchSizeObservation {
+  timestamp: number;
+  lowQueuePressure: number;
+  batchSize: number;
+  systemPressureState: 'NORMAL' | 'PRESSURED' | 'OVERLOADED' | 'EXTREME';
+  strategy: ProcessingStrategy;
+}
+
+export interface SheddingTelemetry {
+  total: number;
+  click: number;
+  log: number;
+  critical: number;
+  lastShedEvent: ShedLogEntry | null;
+  lastShedReason: string;
+}
+
+export interface BatchingTelemetry {
+  currentBatchSize: number;
+  batchSizeReason: string;
+  history: BatchSizeObservation[];
+}
+
+export interface AdaptiveTelemetry {
+  systemState: 'NORMAL' | 'PRESSURED' | 'OVERLOADED' | 'EXTREME';
+  strategy: ProcessingStrategy;
+  criticalStrategy: ProcessingStrategy;
+  highStrategy: ProcessingStrategy;
+  lowStrategy: ProcessingStrategy;
+  reason: string;
+  queuePressure: number;
+  backlogGrowth: number;
+  workerLoad: number;
+  sheddingStatus: 'ENABLED' | 'DISABLED';
+}
+
 export interface TelemetrySnapshot {
   timestamp: number;
   systemStatus: 'IDLE' | 'RUNNING';
@@ -46,58 +93,91 @@ export interface TelemetrySnapshot {
   activeStrategy: ProcessingStrategy;
   systemPressureState: 'NORMAL' | 'PRESSURED' | 'OVERLOADED' | 'EXTREME';
   adaptiveReason: string;
-  
+
+  // Per-tier strategies
+  criticalStrategy: ProcessingStrategy;
+  highStrategy: ProcessingStrategy;
+  lowStrategy: ProcessingStrategy;
+
   // Rates
   incomingRatePerSec: number;
   incomingRatePerMin: number;
   throughputPerSec: number;
   throughputPerMin: number;
-  
+
   // Queues
   criticalQueueSize: number;
   criticalQueueCapacity: number;
   criticalQueuePressure: number;
-  
+
   highQueueSize: number;
   highQueueCapacity: number;
-  
+  highQueuePressure: number;
+
   lowQueueSize: number;
   lowQueueCapacity: number;
   lowQueuePressure: number;
-  
+
+  // Adaptive Dynamics
+  currentBatchSize: number;
+  batchSizeReason: string;
+  workerLoadPercent: number;
+  backlogGrowthRate: number;
+  batchSizeHistory: BatchSizeObservation[];
+
   // Latency (ms)
   criticalLatencyP50: number;
   criticalLatencyP95: number;
   criticalLatencyAvg: number;
-  
+
   nonCriticalLatencyP50: number;
   nonCriticalLatencyP95: number;
   nonCriticalLatencyAvg: number;
-  
-  // Counters
+
+  // Counters & Event Accounting
   totalReceived: number;
   totalProcessed: number;
   criticalReceived: number;
   criticalProcessed: number;
   criticalShed: number;
-  criticalLost: number; // Calculated mathematically!
-  criticalInFlight: number; // Currently inside worker execution
-  
+  criticalLost: number;
+  criticalInFlight: number;
+
   highReceived: number;
   highProcessed: number;
-  
+
   lowReceived: number;
   lowProcessed: number;
-  
+
   batchedCount: number;
   deferredCount: number;
   shedCount: number;
+  clickShedCount: number;
+  logShedCount: number;
+  lastShedEvent: ShedLogEntry | null;
+  lastShedReason: string;
   safetyViolations: number;
-  
+
   // Admission Backpressure
   backpressureActive: boolean;
-  
+
+  // Grouped Telemetry for Explainability
+  queues: {
+    critical: QueueTelemetry;
+    high: QueueTelemetry;
+    low: QueueTelemetry;
+  };
+  strategies: {
+    critical: ProcessingStrategy;
+    high: ProcessingStrategy;
+    low: ProcessingStrategy;
+  };
+  shedding: SheddingTelemetry;
+  batching: BatchingTelemetry;
+  adaptive: AdaptiveTelemetry;
+
   // Logs
   recentShedEvents: ShedLogEntry[];
   recentActivityLogs: ActivityLogEntry[];
 }
+

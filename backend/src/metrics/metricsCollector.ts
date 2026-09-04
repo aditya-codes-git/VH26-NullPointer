@@ -1,4 +1,4 @@
-import { PipelineEvent, TelemetrySnapshot, ActivityLogEntry } from '../models/event.js';
+import { PipelineEvent, TelemetrySnapshot, ActivityLogEntry, BatchSizeObservation } from '../models/event.js';
 import { QueueManager } from '../queues/queueManager.js';
 import { SheddingPolicy } from '../backpressure/sheddingPolicy.js';
 import { BackpressureController } from '../backpressure/backpressureController.js';
@@ -42,6 +42,10 @@ export class MetricsCollector {
   // Ring buffer for real-time activity and decision logs
   private recentActivityLogs: ActivityLogEntry[] = [];
   private readonly maxActivityLogs = 50;
+
+  // Ring buffer for batch size history (max 50 observations)
+  private batchSizeHistory: BatchSizeObservation[] = [];
+  private readonly maxBatchObservations = 50;
 
   constructor(
     queueManager: QueueManager,
@@ -240,6 +244,107 @@ export class MetricsCollector {
     const criticalAccountedFor = this.criticalProcessed + criticalInQueue + this.criticalInFlight;
     const calculatedCriticalLost = Math.max(0, this.criticalReceived - criticalAccountedFor);
 
+    const lowQueuePressure = Number(this.queueManager.lowQueue.getPressure().toFixed(3));
+    const highQueuePressure = Number(this.queueManager.highQueue.getPressure().toFixed(3));
+    const criticalQueuePressure = Number(this.queueManager.criticalQueue.getPressure().toFixed(3));
+
+    // Record batch size observation (when batch size changes, or on interval, max 50 observations)
+    const lastObs = this.batchSizeHistory[this.batchSizeHistory.length - 1];
+    const shouldRecordObs = !lastObs || 
+      lastObs.batchSize !== evaluation.batchSize ||
+      lastObs.strategy !== evaluation.strategy ||
+      (now - lastObs.timestamp >= 1000);
+
+    if (shouldRecordObs) {
+      this.batchSizeHistory.push({
+        timestamp: now,
+        lowQueuePressure: Number((lowQueuePressure * 100).toFixed(1)),
+        batchSize: evaluation.batchSize,
+        systemPressureState: evaluation.state,
+        strategy: evaluation.strategy,
+      });
+      if (this.batchSizeHistory.length > this.maxBatchObservations) {
+        this.batchSizeHistory.shift();
+      }
+    }
+
+    const criticalQueueSize = this.queueManager.criticalQueue.size();
+    const criticalQueueCapacity = this.queueManager.criticalQueue.capacity;
+    const highQueueSize = this.queueManager.highQueue.size();
+    const highQueueCapacity = this.queueManager.highQueue.capacity;
+    const lowQueueSize = this.queueManager.lowQueue.size();
+    const lowQueueCapacity = this.queueManager.lowQueue.capacity;
+
+    const queueTelemetry = {
+      critical: {
+        name: 'CRITICAL',
+        size: criticalQueueSize,
+        capacity: criticalQueueCapacity,
+        pressure: criticalQueuePressure,
+        pressurePercent: Number((criticalQueuePressure * 100).toFixed(1)),
+        processedCount: this.criticalProcessed,
+        queuedCount: criticalQueueSize,
+        strategy: evaluation.criticalStrategy,
+        status: 'PROTECTED' as const,
+      },
+      high: {
+        name: 'HIGH',
+        size: highQueueSize,
+        capacity: highQueueCapacity,
+        pressure: highQueuePressure,
+        pressurePercent: Number((highQueuePressure * 100).toFixed(1)),
+        processedCount: this.highProcessed,
+        queuedCount: highQueueSize,
+        strategy: evaluation.highStrategy,
+        status: 'ACTIVE' as const,
+      },
+      low: {
+        name: 'LOW',
+        size: lowQueueSize,
+        capacity: lowQueueCapacity,
+        pressure: lowQueuePressure,
+        pressurePercent: Number((lowQueuePressure * 100).toFixed(1)),
+        processedCount: this.lowProcessed,
+        queuedCount: lowQueueSize,
+        strategy: evaluation.lowStrategy,
+        status: 'ADAPTIVE' as const,
+      },
+    };
+
+    const strategiesTelemetry = {
+      critical: evaluation.criticalStrategy,
+      high: evaluation.highStrategy,
+      low: evaluation.lowStrategy,
+    };
+
+    const sheddingTelemetry = {
+      total: this.sheddingPolicy.totalShedCount,
+      click: this.sheddingPolicy.clickShedCount,
+      log: this.sheddingPolicy.logShedCount,
+      critical: this.criticalShed,
+      lastShedEvent: this.sheddingPolicy.lastShedEvent,
+      lastShedReason: this.sheddingPolicy.lastShedReason,
+    };
+
+    const batchingTelemetry = {
+      currentBatchSize: evaluation.batchSize,
+      batchSizeReason: evaluation.batchSizeReason,
+      history: [...this.batchSizeHistory],
+    };
+
+    const adaptiveTelemetry = {
+      systemState: evaluation.state,
+      strategy: evaluation.strategy,
+      criticalStrategy: evaluation.criticalStrategy,
+      highStrategy: evaluation.highStrategy,
+      lowStrategy: evaluation.lowStrategy,
+      reason: evaluation.reason,
+      queuePressure: Number((lowQueuePressure * 100).toFixed(1)),
+      backlogGrowth: evaluation.backlogGrowthRate,
+      workerLoad: evaluation.workerLoadPercent,
+      sheddingStatus: evaluation.sheddingStatus,
+    };
+
     return {
       timestamp: now,
       systemStatus: this.simulator?.getMode() !== 'STOPPED' ? 'RUNNING' : 'IDLE',
@@ -248,21 +353,32 @@ export class MetricsCollector {
       systemPressureState: evaluation.state,
       adaptiveReason: evaluation.reason,
 
+      criticalStrategy: evaluation.criticalStrategy,
+      highStrategy: evaluation.highStrategy,
+      lowStrategy: evaluation.lowStrategy,
+
       incomingRatePerSec: incomingPerSec,
       incomingRatePerMin: incomingPerSec * 60,
       throughputPerSec: processedPerSec,
       throughputPerMin: processedPerSec * 60,
 
-      criticalQueueSize: this.queueManager.criticalQueue.size(),
-      criticalQueueCapacity: this.queueManager.criticalQueue.capacity,
-      criticalQueuePressure: Number(this.queueManager.criticalQueue.getPressure().toFixed(3)),
+      criticalQueueSize,
+      criticalQueueCapacity,
+      criticalQueuePressure,
 
-      highQueueSize: this.queueManager.highQueue.size(),
-      highQueueCapacity: this.queueManager.highQueue.capacity,
+      highQueueSize,
+      highQueueCapacity,
+      highQueuePressure,
 
-      lowQueueSize: this.queueManager.lowQueue.size(),
-      lowQueueCapacity: this.queueManager.lowQueue.capacity,
-      lowQueuePressure: Number(this.queueManager.lowQueue.getPressure().toFixed(3)),
+      lowQueueSize,
+      lowQueueCapacity,
+      lowQueuePressure,
+
+      currentBatchSize: evaluation.batchSize,
+      batchSizeReason: evaluation.batchSizeReason,
+      workerLoadPercent: evaluation.workerLoadPercent,
+      backlogGrowthRate: evaluation.backlogGrowthRate,
+      batchSizeHistory: [...this.batchSizeHistory],
 
       criticalLatencyP50: critLat.p50,
       criticalLatencyP95: critLat.p95,
@@ -289,9 +405,20 @@ export class MetricsCollector {
       batchedCount: this.batchedCount,
       deferredCount: this.deferredCount,
       shedCount: this.sheddingPolicy.totalShedCount,
+      clickShedCount: this.sheddingPolicy.clickShedCount,
+      logShedCount: this.sheddingPolicy.logShedCount,
+      lastShedEvent: this.sheddingPolicy.lastShedEvent,
+      lastShedReason: this.sheddingPolicy.lastShedReason,
       safetyViolations: this.sheddingPolicy.totalSafetyViolations,
 
       backpressureActive: this.backpressureController.isActive(),
+
+      queues: queueTelemetry,
+      strategies: strategiesTelemetry,
+      shedding: sheddingTelemetry,
+      batching: batchingTelemetry,
+      adaptive: adaptiveTelemetry,
+
       recentShedEvents: this.sheddingPolicy.getRecentLogs(),
       recentActivityLogs: [...this.recentActivityLogs],
     };
@@ -315,6 +442,7 @@ export class MetricsCollector {
     this.criticalLatencies = [];
     this.nonCriticalLatencies = [];
     this.recentActivityLogs = [];
+    this.batchSizeHistory = [];
     this.sheddingPolicy.clear();
     this.queueManager.clearAll();
   }

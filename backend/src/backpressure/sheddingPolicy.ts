@@ -13,6 +13,11 @@ export class SheddingPolicy {
   private recentShedLogs: ShedLogEntry[] = [];
   private readonly maxLogHistory = 100;
   public totalShedCount = 0;
+  public clickShedCount = 0;
+  public logShedCount = 0;
+  public criticalShedCount = 0; // Invariant: must stay 0
+  public lastShedEvent: ShedLogEntry | null = null;
+  public lastShedReason = '';
   public totalSafetyViolations = 0;
 
   constructor(queueManager: QueueManager) {
@@ -51,7 +56,7 @@ export class SheddingPolicy {
       candidate.strategy = 'SHED';
 
       const entry: ShedLogEntry = {
-        id: nanoid(8),
+        id: candidate.id,
         eventId: candidate.id,
         type: candidate.type,
         priority: candidate.priority,
@@ -61,6 +66,15 @@ export class SheddingPolicy {
 
       shedCount++;
       this.totalShedCount++;
+
+      if (candidate.type === 'CLICK') {
+        this.clickShedCount++;
+      } else if (candidate.type === 'LOG') {
+        this.logShedCount++;
+      }
+
+      this.lastShedEvent = entry;
+      this.lastShedReason = reason;
       entries.push(entry);
 
       this.recentShedLogs.unshift(entry);
@@ -79,6 +93,12 @@ export class SheddingPolicy {
   public clear(): void {
     this.recentShedLogs = [];
     this.totalShedCount = 0;
+    this.clickShedCount = 0;
+    this.logShedCount = 0;
+    this.criticalShedCount = 0;
+    this.lastShedEvent = null;
+    this.lastShedReason = '';
     this.totalSafetyViolations = 0;
   }
 }
+

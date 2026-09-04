@@ -40,7 +40,8 @@ const workerPool = new WorkerPool(
   config,
   queueManager,
   batchProcessor,
-  sheddingPolicy
+  sheddingPolicy,
+  adaptiveEngine
 );
 workerPool.registerMetricsCollector(metricsCollector);
 

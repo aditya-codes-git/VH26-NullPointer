@@ -3,6 +3,7 @@ import { PipelineConfig } from '../config/pipelineConfig.js';
 import { QueueManager } from '../queues/queueManager.js';
 import { BatchProcessor } from './batchProcessor.js';
 import { SheddingPolicy } from '../backpressure/sheddingPolicy.js';
+import { AdaptiveDecisionEngine } from '../decision-engine/adaptiveEngine.js';
 
 export interface WorkerEventResult {
   event: PipelineEvent;
@@ -17,6 +18,7 @@ export class WorkerPool {
   private queueManager: QueueManager;
   private batchProcessor: BatchProcessor;
   private sheddingPolicy: SheddingPolicy;
+  private adaptiveEngine?: AdaptiveDecisionEngine;
   
   private isRunning = false;
   private activeStrategy: ProcessingStrategy = 'STREAM';
@@ -31,12 +33,18 @@ export class WorkerPool {
     config: PipelineConfig,
     queueManager: QueueManager,
     batchProcessor: BatchProcessor,
-    sheddingPolicy: SheddingPolicy
+    sheddingPolicy: SheddingPolicy,
+    adaptiveEngine?: AdaptiveDecisionEngine
   ) {
     this.config = config;
     this.queueManager = queueManager;
     this.batchProcessor = batchProcessor;
     this.sheddingPolicy = sheddingPolicy;
+    this.adaptiveEngine = adaptiveEngine;
+  }
+
+  public registerAdaptiveEngine(engine: AdaptiveDecisionEngine): void {
+    this.adaptiveEngine = engine;
   }
 
   public registerMetricsCollector(collector: any): void {
@@ -115,7 +123,8 @@ export class WorkerPool {
         }
 
         case 'BATCH': {
-          const batchSize = Math.min(this.config.BATCH_SIZE, this.queueManager.lowQueue.size());
+          const targetBatchSize = this.adaptiveEngine ? this.adaptiveEngine.getCurrentBatchSize() : this.config.BATCH_SIZE;
+          const batchSize = Math.min(targetBatchSize, this.queueManager.lowQueue.size());
           if (batchSize > 0) {
             const batch = this.queueManager.lowQueue.dequeueBatch(batchSize);
             const result = await this.batchProcessor.processBatch(batch);
@@ -143,22 +152,23 @@ export class WorkerPool {
           const excess = this.queueManager.lowQueue.size() - Math.round(this.config.LOW_QUEUE_CAPACITY * this.config.DEFER_PRESSURE_THRESHOLD);
           if (excess > 0) {
             const countToShed = Math.min(excess, 50);
-            const result = this.sheddingPolicy.executeShedding(countToShed, 'LOW_QUEUE_PRESSURE_CRITICAL_OVERLOAD');
+            const result = this.sheddingPolicy.executeShedding(countToShed, 'Controlled shedding due to queue pressure');
             if (result.entries.length > 0 && this.metricsCollector) {
-              const top = result.entries[0];
-              const now = Date.now();
-              const d = new Date(now);
-              const timeStr = `${d.toTimeString().split(' ')[0]}.${String(now % 1000).padStart(3, '0')}`;
-              this.metricsCollector.addActivityLog({
-                id: top.eventId,
-                type: top.type,
-                priority: top.priority,
-                strategy: 'SHED',
-                status: 'SHED',
-                reason: `Controlled shed: Dropped ${result.shedCount} low-priority logs to preserve capacity`,
-                timestamp: timeStr,
-                timestampMs: now,
-              });
+              for (const entry of result.entries) {
+                const now = entry.timestamp;
+                const d = new Date(now);
+                const timeStr = `${d.toTimeString().split(' ')[0]}.${String(now % 1000).padStart(3, '0')}`;
+                this.metricsCollector.addActivityLog({
+                  id: entry.eventId,
+                  type: entry.type,
+                  priority: entry.priority,
+                  strategy: 'SHED',
+                  status: 'SHED',
+                  reason: entry.reason,
+                  timestamp: timeStr,
+                  timestampMs: now,
+                });
+              }
             }
           }
           break;

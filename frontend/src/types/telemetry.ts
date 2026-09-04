@@ -23,6 +23,54 @@ export interface ActivityLogEntry {
   timestampMs: number;
 }
 
+export interface QueueTelemetry {
+  name: string;
+  size: number;
+  capacity: number;
+  pressure: number;
+  pressurePercent: number;
+  strategy: ProcessingStrategy;
+  status: 'PROTECTED' | 'ACTIVE' | 'ADAPTIVE';
+  processedCount: number;
+  queuedCount: number;
+}
+
+export interface BatchSizeObservation {
+  timestamp: number;
+  lowQueuePressure: number;
+  batchSize: number;
+  systemPressureState: SystemPressureState;
+  strategy: ProcessingStrategy;
+}
+
+export interface SheddingTelemetry {
+  total: number;
+  click: number;
+  log: number;
+  critical: number;
+  lastShedEvent: ShedLogEntry | null;
+  lastShedReason: string;
+}
+
+export interface BatchingTelemetry {
+  currentBatchSize: number;
+  batchSizeReason: string;
+  history: BatchSizeObservation[];
+}
+
+export interface AdaptiveTelemetry {
+  systemState: SystemPressureState;
+  strategy: ProcessingStrategy;
+  criticalStrategy: ProcessingStrategy;
+  highStrategy: ProcessingStrategy;
+  lowStrategy: ProcessingStrategy;
+  reason: string;
+  queuePressure: number;
+  backlogGrowth: number;
+  workerLoad: number;
+  sheddingStatus: 'ENABLED' | 'DISABLED';
+}
+
 export interface TelemetrySnapshot {
   timestamp: number;
   systemStatus: 'IDLE' | 'RUNNING';
@@ -30,6 +78,11 @@ export interface TelemetrySnapshot {
   activeStrategy: ProcessingStrategy;
   systemPressureState: SystemPressureState;
   adaptiveReason: string;
+
+  // Per-tier strategies
+  criticalStrategy?: ProcessingStrategy;
+  highStrategy?: ProcessingStrategy;
+  lowStrategy?: ProcessingStrategy;
 
   // Rates
   incomingRatePerSec: number;
@@ -44,10 +97,18 @@ export interface TelemetrySnapshot {
 
   highQueueSize: number;
   highQueueCapacity: number;
+  highQueuePressure?: number;
 
   lowQueueSize: number;
   lowQueueCapacity: number;
   lowQueuePressure: number;
+
+  // Adaptive Dynamics
+  currentBatchSize?: number;
+  batchSizeReason?: string;
+  workerLoadPercent?: number;
+  backlogGrowthRate?: number;
+  batchSizeHistory?: BatchSizeObservation[];
 
   // Latency (ms)
   criticalLatencyP50: number;
@@ -76,10 +137,29 @@ export interface TelemetrySnapshot {
   batchedCount: number;
   deferredCount: number;
   shedCount: number;
+  clickShedCount?: number;
+  logShedCount?: number;
+  lastShedEvent?: ShedLogEntry | null;
+  lastShedReason?: string;
   safetyViolations: number;
 
   // Admission Backpressure
   backpressureActive: boolean;
+
+  // Grouped Telemetry
+  queues?: {
+    critical: QueueTelemetry;
+    high: QueueTelemetry;
+    low: QueueTelemetry;
+  };
+  strategies?: {
+    critical: ProcessingStrategy;
+    high: ProcessingStrategy;
+    low: ProcessingStrategy;
+  };
+  shedding?: SheddingTelemetry;
+  batching?: BatchingTelemetry;
+  adaptive?: AdaptiveTelemetry;
 
   // Logs
   recentShedEvents: ShedLogEntry[];

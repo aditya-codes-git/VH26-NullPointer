@@ -19,6 +19,7 @@ export interface PipelineConfig {
   // Micro-batching configuration
   BATCH_SIZE: number;
   BATCH_MAX_WAIT_MS: number;
+  DYNAMIC_BATCH_TIERS: Array<{ minPressure: number; batchSize: number }>;
   
   // Simulated processing service time (ms)
   // Calibrated so 1 event takes ~7ms single-threaded (~140 events/sec capacity).
@@ -50,6 +51,14 @@ export const DEFAULT_CONFIG: PipelineConfig = {
   
   BATCH_SIZE: 25,
   BATCH_MAX_WAIT_MS: 150,
+  DYNAMIC_BATCH_TIERS: [
+    { minPressure: 0.95, batchSize: 250 },
+    { minPressure: 0.85, batchSize: 200 },
+    { minPressure: 0.70, batchSize: 100 },
+    { minPressure: 0.50, batchSize: 50 },
+    { minPressure: 0.30, batchSize: 25 },
+    { minPressure: 0.0, batchSize: 10 },
+  ],
   
   BASE_PROCESSING_DELAY_MS: 7, // 7ms per event -> ~140/sec max per worker
   BATCH_PROCESSING_DELAY_MS: 15, // 15ms for an entire batch of 25 events (~0.6ms/event!)
