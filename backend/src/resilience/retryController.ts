@@ -1,4 +1,4 @@
-import { PipelineEvent, RecoveryAuditEntry, FaultToleranceTelemetry } from '../models/event.js';
+import { PipelineEvent, RecoveryAuditEntry, FaultToleranceTelemetry, RecoveryEventSummary } from '../models/event.js';
 import { PipelineConfig } from '../config/pipelineConfig.js';
 import { QueueManager } from '../queues/queueManager.js';
 
