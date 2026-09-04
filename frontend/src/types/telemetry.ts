@@ -26,7 +26,7 @@ export interface ActivityLogEntry {
 export interface TelemetrySnapshot {
   timestamp: number;
   systemStatus: 'IDLE' | 'RUNNING';
-  simulatorMode: 'STOPPED' | 'NORMAL' | 'SPIKE';
+  simulatorMode: 'STOPPED' | 'NORMAL' | 'SPIKE' | 'CUSTOM';
   activeStrategy: ProcessingStrategy;
   systemPressureState: SystemPressureState;
   adaptiveReason: string;

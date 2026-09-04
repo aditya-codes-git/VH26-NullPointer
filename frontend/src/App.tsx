@@ -3,7 +3,7 @@ import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend, Ca
 import {
   initSocket,
   triggerStart,
-  triggerSpike,
+  triggerRate,
   triggerNormal,
   triggerStop,
   triggerReset,
@@ -16,6 +16,7 @@ export const App: React.FC = () => {
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
   const [isPending, setIsPending] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [sliderRate, setSliderRate] = useState<number>(1000);
 
   // Rolling latency history buffer (last 20 snapshots from live backend)
   const [latencyData, setLatencyData] = useState<Array<{ time: string; critical: number; nonCritical: number }>>([
@@ -57,25 +58,27 @@ export const App: React.FC = () => {
   }, []);
 
   // Simulation API Trigger Handlers
-  const handleStartNormal = async () => {
+  const handleApplyRate = async (rateToApply?: number) => {
+    const rate = rateToApply ?? sliderRate;
     try {
       setIsPending(true);
       setErrorMessage(null);
-      await triggerStart();
+      await triggerRate(rate);
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to start simulator');
+      setErrorMessage(err.message || 'Failed to apply traffic rate');
     } finally {
       setIsPending(false);
     }
   };
 
-  const handleTriggerSpike = async () => {
+  const handleStartNormal = async () => {
     try {
       setIsPending(true);
       setErrorMessage(null);
-      await triggerSpike();
+      setSliderRate(1000);
+      await triggerStart();
     } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to trigger spike');
+      setErrorMessage(err.message || 'Failed to start simulator');
     } finally {
       setIsPending(false);
     }
@@ -85,6 +88,7 @@ export const App: React.FC = () => {
     try {
       setIsPending(true);
       setErrorMessage(null);
+      setSliderRate(1000);
       await triggerNormal();
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to return to normal');
@@ -109,6 +113,7 @@ export const App: React.FC = () => {
     try {
       setIsPending(true);
       setErrorMessage(null);
+      setSliderRate(1000);
       await triggerReset();
       setLatencyData([{ time: '--:--', critical: 15, nonCritical: 18 }]);
     } catch (err: any) {
@@ -391,9 +396,17 @@ export const App: React.FC = () => {
           {/* Section 3: Simulation Controls */}
           <section className="bg-slate-50 p-6 rounded-xl border border-[#e2e8f0] shadow-xs">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-sm font-bold text-[#131b2e] uppercase font-mono tracking-wider">
-                Simulation Controls
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-[#131b2e] uppercase font-mono tracking-wider">
+                  Simulation Controls
+                </h3>
+                {simulatorMode !== 'STOPPED' && (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-mono font-bold bg-emerald-100 text-emerald-800">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    LIVE ({incomingRate} events/min)
+                  </span>
+                )}
+              </div>
               {isPending && (
                 <span className="text-xs font-mono text-blue-600 flex items-center gap-1">
                   <span className="material-symbols-outlined text-[16px] animate-spin">refresh</span>
@@ -401,12 +414,101 @@ export const App: React.FC = () => {
                 </span>
               )}
             </div>
+
+            {/* Interactive Traffic Rate Slider Card */}
+            <div className="bg-white p-5 rounded-lg border border-slate-200 mb-4 shadow-2xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-amber-600 text-[20px]">speed</span>
+                  <label htmlFor="traffic-rate-slider" className="text-xs font-bold text-slate-800 uppercase tracking-wider font-mono">
+                    Traffic Rate
+                  </label>
+                </div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-2xl font-bold font-mono text-amber-600 tracking-tight">
+                    {sliderRate.toLocaleString()}
+                  </span>
+                  <span className="text-xs font-medium text-slate-500 font-sans">events/min</span>
+                </div>
+              </div>
+
+              {/* Slider Track & Thumb */}
+              <div className="relative py-1">
+                <input
+                  id="traffic-rate-slider"
+                  type="range"
+                  min={1000}
+                  max={50000}
+                  step={1000}
+                  value={sliderRate}
+                  onChange={(e) => setSliderRate(Number(e.target.value))}
+                  disabled={isPending}
+                  className="w-full h-2.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-amber-600 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                />
+              </div>
+
+              {/* Simple Scale Labels */}
+              <div className="grid grid-cols-5 text-[11px] font-mono pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSliderRate(1000)}
+                  className="text-left group focus:outline-none cursor-pointer"
+                >
+                  <span className={`block font-bold transition-colors ${sliderRate <= 5000 ? 'text-blue-600 font-extrabold' : 'text-slate-600 group-hover:text-blue-600'}`}>1K</span>
+                  <span className="text-[10px] text-slate-400 block tracking-tight">NORMAL</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSliderRate(10000)}
+                  className="text-left group focus:outline-none cursor-pointer"
+                >
+                  <span className={`block font-bold transition-colors ${sliderRate > 5000 && sliderRate <= 15000 ? 'text-amber-600 font-extrabold' : 'text-slate-600 group-hover:text-amber-600'}`}>10K</span>
+                  <span className="text-[10px] text-slate-400 block tracking-tight">PRESSURED</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSliderRate(20000)}
+                  className="text-center group focus:outline-none cursor-pointer"
+                >
+                  <span className={`block font-bold transition-colors ${sliderRate > 15000 && sliderRate <= 28000 ? 'text-amber-600 font-extrabold' : 'text-slate-600 group-hover:text-amber-600'}`}>20K</span>
+                  <span className="text-[10px] text-slate-400 block tracking-tight">HIGH</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSliderRate(35000)}
+                  className="text-right group focus:outline-none cursor-pointer"
+                >
+                  <span className={`block font-bold transition-colors ${sliderRate > 28000 && sliderRate <= 42000 ? 'text-orange-600 font-extrabold' : 'text-slate-600 group-hover:text-orange-600'}`}>35K</span>
+                  <span className="text-[10px] text-slate-400 block tracking-tight">OVERLOADED</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSliderRate(50000)}
+                  className="text-right group focus:outline-none cursor-pointer"
+                >
+                  <span className={`block font-bold transition-colors ${sliderRate > 42000 ? 'text-rose-600 font-extrabold' : 'text-slate-600 group-hover:text-rose-600'}`}>50K</span>
+                  <span className="text-[10px] text-slate-400 block tracking-tight">EXTREME</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Action Buttons Row */}
             <div className="flex flex-wrap gap-3 items-center">
+              {/* Apply Traffic Rate Button (Replaces Trigger 20x Spike) */}
+              <button
+                onClick={() => handleApplyRate(sliderRate)}
+                disabled={isPending}
+                className="px-5 py-2 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">play_arrow</span>
+                Apply Traffic Rate
+              </button>
+
               <button
                 onClick={handleStartNormal}
                 disabled={isPending}
-                className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all shadow-xs disabled:opacity-50 ${
-                  simulatorMode === 'NORMAL'
+                className={`px-4 py-2 rounded-lg text-xs font-semibold transition-all shadow-xs disabled:opacity-50 cursor-pointer ${
+                  simulatorMode === 'NORMAL' && sliderRate === 1000
                     ? 'bg-blue-600 text-white ring-2 ring-blue-300'
                     : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100'
                 }`}
@@ -414,29 +516,10 @@ export const App: React.FC = () => {
                 Start Normal Load
               </button>
 
-              <div className="relative group">
-                <button
-                  onClick={handleTriggerSpike}
-                  disabled={isPending}
-                  className={`px-5 py-2 rounded-lg text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 disabled:opacity-50 ${
-                    simulatorMode === 'SPIKE'
-                      ? 'bg-amber-600 text-white ring-4 ring-amber-200 animate-pulse'
-                      : 'bg-amber-600 hover:bg-amber-700 text-white'
-                  }`}
-                >
-                  <span className="material-symbols-outlined text-[16px]">local_fire_department</span>
-                  Trigger 20x Spike
-                </button>
-                {/* Tooltip */}
-                <div className="absolute bottom-full mb-2 left-0 w-64 bg-slate-800 text-white text-[11px] p-2 rounded shadow-lg hidden group-hover:block z-20 pointer-events-none">
-                  Suddenly increase traffic from ~1,000 to ~20,000 events/min
-                </div>
-              </div>
-
               <button
                 onClick={handleReturnToNormal}
                 disabled={isPending}
-                className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-100 transition-colors shadow-xs disabled:opacity-50"
+                className="px-4 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-100 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
               >
                 Return to Normal
               </button>
@@ -446,7 +529,7 @@ export const App: React.FC = () => {
               <button
                 onClick={handleStop}
                 disabled={isPending}
-                className={`px-3.5 py-2 bg-white border border-rose-200 text-rose-700 rounded-lg text-xs font-semibold hover:bg-rose-50 transition-colors shadow-xs flex items-center gap-1 disabled:opacity-50 ${
+                className={`px-3.5 py-2 bg-white border border-rose-200 text-rose-700 rounded-lg text-xs font-semibold hover:bg-rose-50 transition-colors shadow-xs flex items-center gap-1 disabled:opacity-50 cursor-pointer ${
                   simulatorMode === 'STOPPED' ? 'ring-2 ring-rose-200 font-bold' : ''
                 }`}
               >
@@ -456,7 +539,7 @@ export const App: React.FC = () => {
               <button
                 onClick={handleReset}
                 disabled={isPending}
-                className="px-3.5 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-100 transition-colors shadow-xs flex items-center gap-1 disabled:opacity-50"
+                className="px-3.5 py-2 bg-white border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-100 transition-colors shadow-xs flex items-center gap-1 disabled:opacity-50 cursor-pointer"
               >
                 <span className="material-symbols-outlined text-[16px]">restart_alt</span> Reset
               </button>

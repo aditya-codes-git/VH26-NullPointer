@@ -46,6 +46,16 @@ export async function triggerStart(): Promise<any> {
   return res.json();
 }
 
+export async function triggerRate(rate: number): Promise<any> {
+  const res = await fetch('http://localhost:4000/api/simulator/rate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rate }),
+  });
+  if (!res.ok) throw new Error(`Failed to set traffic rate: ${res.statusText}`);
+  return res.json();
+}
+
 export async function triggerSpike(): Promise<any> {
   const res = await fetch('http://localhost:4000/api/simulator/spike', { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to trigger spike: ${res.statusText}`);
