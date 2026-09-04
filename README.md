@@ -1,4 +1,4 @@
-# AdaptiFlow: Adaptive Event-Processing Pipeline
+# Adaptive Event-Processing Pipeline
 
 > An adaptive event-processing pipeline that protects critical workloads during sudden traffic spikes in e-commerce applications.
 
