@@ -57,6 +57,42 @@ export interface RecoveryEventSummary {
   lifecycle: RecoveryAuditEntry[];
 }
 
+export interface WorkerScalingAction {
+  id: string;
+  timestamp: string; // HH:mm:ss.SSS
+  timestampMs: number;
+  direction: 'UP' | 'DOWN';
+  previousWorkers: number;
+  newWorkers: number;
+  reason: string;
+  queuePressure: number;
+  backlog: number;
+  workerUtilization: number;
+}
+
+export interface WorkerInstanceStatus {
+  id: string;
+  status: 'ACTIVE' | 'BUSY' | 'RETIRING';
+  processedCount: number;
+  currentJob?: string;
+  activeDurationMs: number;
+}
+
+export interface WorkerScalingTelemetry {
+  currentWorkers: number;
+  minWorkers: number;
+  maxWorkers: number;
+  workerUtilization: number;
+  queuePressure: number;
+  backlog: number;
+  scaleUpCount: number;
+  scaleDownCount: number;
+  lastScalingAction: WorkerScalingAction | null;
+  lastScalingReason: string;
+  scalingHistory: WorkerScalingAction[];
+  workers: WorkerInstanceStatus[];
+}
+
 export interface FaultToleranceTelemetry {
   retryAttempts: number;
   retrySuccesses: number;
@@ -237,6 +273,7 @@ export interface TelemetrySnapshot {
   batching: BatchingTelemetry;
   adaptive: AdaptiveTelemetry;
   faultTolerance: FaultToleranceTelemetry;
+  workerScaling: WorkerScalingTelemetry;
 
   // Logs
   recentShedEvents: ShedLogEntry[];

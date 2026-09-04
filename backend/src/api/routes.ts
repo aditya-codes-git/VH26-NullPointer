@@ -7,13 +7,15 @@ import { broadcastTelemetryNow } from '../websocket/socketServer.js';
 import { KafkaEventProducer } from '../kafka/producer.js';
 import { getKafkaStatus, isProducerReady, KAFKA_CONFIG } from '../kafka/kafkaClient.js';
 import { RetryController } from '../resilience/retryController.js';
+import { WorkerScaler } from '../workers/workerScaler.js';
 
 export function createApiRouter(
   simulator: EventSimulator,
   metricsCollector: MetricsCollector,
   config: PipelineConfig,
   kafkaProducer?: KafkaEventProducer,
-  retryController?: RetryController
+  retryController?: RetryController,
+  workerScaler?: WorkerScaler
 ): Router {
   const router = Router();
 
@@ -186,6 +188,33 @@ export function createApiRouter(
       return res.status(500).json({ error: 'RetryController not registered' });
     }
     res.json(retryController.getTelemetry());
+  });
+
+  // ==========================================================
+  // Stretch Goal 2: Dynamic Worker Scaling Demo Endpoints
+  // ==========================================================
+  router.get('/demo/worker-scaling', (_req, res) => {
+    if (!workerScaler) {
+      return res.status(500).json({ error: 'WorkerScaler not registered' });
+    }
+    res.json(workerScaler.getTelemetry());
+  });
+
+  /**
+   * Stimulates real scaling evaluation: runs an evaluation pass after applying
+   * or checking genuine queue metrics. The WorkerScaler independently decides
+   * whether to scale up/down/stay.
+   */
+  router.post('/demo/scale', async (_req, res) => {
+    if (!workerScaler) {
+      return res.status(500).json({ error: 'WorkerScaler not registered' });
+    }
+    await workerScaler.evaluate();
+    broadcastTelemetryNow();
+    res.json({
+      message: 'WorkerScaler evaluation completed',
+      telemetry: workerScaler.getTelemetry(),
+    });
   });
 
   return router;

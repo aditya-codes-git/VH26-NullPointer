@@ -5,6 +5,7 @@ import { BackpressureController } from '../backpressure/backpressureController.j
 import { AdaptiveDecisionEngine, SystemPressureState } from '../decision-engine/adaptiveEngine.js';
 import { EventSimulator } from '../simulator/eventSimulator.js';
 import { RetryController } from '../resilience/retryController.js';
+import { WorkerScaler } from '../workers/workerScaler.js';
 
 export class MetricsCollector {
   private queueManager: QueueManager;
@@ -12,6 +13,7 @@ export class MetricsCollector {
   private backpressureController: BackpressureController;
   private adaptiveEngine: AdaptiveDecisionEngine;
   private retryController?: RetryController;
+  private workerScaler?: WorkerScaler;
   private simulator: EventSimulator | null = null;
 
   // Counters
@@ -72,6 +74,10 @@ export class MetricsCollector {
 
   public registerRetryController(controller: RetryController): void {
     this.retryController = controller;
+  }
+
+  public registerWorkerScaler(scaler: WorkerScaler): void {
+    this.workerScaler = scaler;
   }
 
   public registerSimulator(simulator: EventSimulator): void {
@@ -460,6 +466,23 @@ export class MetricsCollector {
             lastRetry: null,
             lastRecovery: null,
             recentRecoveries: [],
+            recoveryEvents: [],
+          },
+      workerScaling: this.workerScaler
+        ? this.workerScaler.getTelemetry()
+        : {
+            currentWorkers: 2,
+            minWorkers: 2,
+            maxWorkers: 8,
+            workerUtilization: 0,
+            queuePressure: 0,
+            backlog: 0,
+            scaleUpCount: 0,
+            scaleDownCount: 0,
+            lastScalingAction: null,
+            lastScalingReason: 'System initialized at baseline concurrency.',
+            scalingHistory: [],
+            workers: [],
           },
 
       recentShedEvents: this.sheddingPolicy.getRecentLogs(),
@@ -493,6 +516,9 @@ export class MetricsCollector {
     this.queueManager.clearAll();
     if (this.retryController) {
       this.retryController.reset();
+    }
+    if (this.workerScaler) {
+      this.workerScaler.reset();
     }
   }
 }

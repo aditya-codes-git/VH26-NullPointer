@@ -19,6 +19,7 @@ import {
 } from './services/socketClient.js';
 import { TelemetrySnapshot } from './types/telemetry.js';
 import { FaultToleranceSection } from './components/FaultToleranceSection.js';
+import { DynamicWorkerScalingSection } from './components/DynamicWorkerScalingSection.js';
 
 export const App: React.FC = () => {
   // Connection and live telemetry states
@@ -1133,6 +1134,14 @@ export const App: React.FC = () => {
           <div id="fault-tolerance">
             <FaultToleranceSection
               faultTolerance={telemetry?.faultTolerance}
+              disabled={isPending}
+            />
+          </div>
+
+          {/* Section: Dynamic Worker Scaling (Stretch Goal 2) */}
+          <div id="dynamic-worker-scaling">
+            <DynamicWorkerScalingSection
+              workerScaling={telemetry?.workerScaling}
               disabled={isPending}
             />
           </div>

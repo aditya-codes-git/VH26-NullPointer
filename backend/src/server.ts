@@ -13,10 +13,12 @@ import { MetricsCollector } from './metrics/metricsCollector.js';
 import { RetryController } from './resilience/retryController.js';
 import { EventSimulator } from './simulator/eventSimulator.js';
 import { createApiRouter } from './api/routes.js';
-import { setupSocketServer } from './websocket/socketServer.js';
+import { setupSocketServer, broadcastTelemetryNow } from './websocket/socketServer.js';
 import { KafkaEventProducer } from './kafka/producer.js';
 import { KafkaEventConsumer } from './kafka/consumer.js';
 import { ensureTopicExists, KAFKA_CONFIG } from './kafka/kafkaClient.js';
+
+import { WorkerScaler } from './workers/workerScaler.js';
 
 const app = express();
 app.use(cors());
@@ -54,6 +56,18 @@ const workerPool = new WorkerPool(
 );
 workerPool.registerMetricsCollector(metricsCollector);
 
+// Dynamic Worker Scaler
+const workerScaler = new WorkerScaler(
+  config,
+  workerPool,
+  queueManager,
+  metricsCollector,
+  () => {
+    broadcastTelemetryNow();
+  }
+);
+metricsCollector.registerWorkerScaler(workerScaler);
+
 // Wire worker completion to metrics
 workerPool.setListeners(
   ({ event, latencyMs }) => {
@@ -81,11 +95,12 @@ const simulator = new EventSimulator(
 metricsCollector.registerSimulator(simulator);
 backpressureController.registerSimulator(simulator);
 
-// Start workers
+// Start workers and scaler
 workerPool.start();
+workerScaler.start();
 
 // Mount API routes (including POST /api/ingest)
-app.use('/api', createApiRouter(simulator, metricsCollector, config, kafkaProducer, retryController));
+app.use('/api', createApiRouter(simulator, metricsCollector, config, kafkaProducer, retryController, workerScaler));
 
 const httpServer = createServer(app);
 setupSocketServer(httpServer, metricsCollector, workerPool);
@@ -137,6 +152,7 @@ const handleShutdown = async () => {
     await kafkaConsumer.stop();
     await kafkaProducer.stop();
   } catch {}
+  workerScaler.stop();
   workerPool.stop();
   process.exit(0);
 };

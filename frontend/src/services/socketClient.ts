@@ -102,3 +102,9 @@ export async function triggerSimulateFailure(
   return res.json();
 }
 
+export async function triggerEvaluateScale(): Promise<any> {
+  const res = await fetch('http://localhost:4000/api/demo/scale', { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to evaluate worker scaling: ${res.statusText}`);
+  return res.json();
+}
+
