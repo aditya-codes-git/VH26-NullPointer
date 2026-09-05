@@ -16,6 +16,7 @@ import {
   triggerNormal,
   triggerStop,
   triggerReset,
+  API_BASE_URL,
 } from './services/socketClient.js';
 import { TelemetrySnapshot } from './types/telemetry.js';
 import { FaultToleranceSection } from './components/FaultToleranceSection.js';
@@ -362,7 +363,7 @@ export const App: React.FC = () => {
             <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg text-xs flex items-center justify-between shadow-xs">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-[18px] text-amber-600">warning</span>
-                <span>Connecting to backend at <code className="font-mono font-bold">http://localhost:4000</code>... Showing last known telemetry.</span>
+                <span>Connecting to backend at <code className="font-mono font-bold">{API_BASE_URL}</code>... Showing last known telemetry.</span>
               </div>
             </div>
           )}
