@@ -19,6 +19,7 @@ export class SheddingPolicy {
   public lastShedEvent: ShedLogEntry | null = null;
   public lastShedReason = '';
   public totalSafetyViolations = 0;
+  public onShed?: (event: PipelineEvent) => void;
 
   constructor(queueManager: QueueManager) {
     this.queueManager = queueManager;
@@ -42,6 +43,12 @@ export class SheddingPolicy {
     event.status = 'SHED';
     event.dropReason = reason;
     event.strategy = 'SHED';
+
+    if (this.onShed) {
+      try {
+        this.onShed(event);
+      } catch {}
+    }
 
     const entry: ShedLogEntry = {
       id: event.id,

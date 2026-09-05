@@ -43,14 +43,37 @@ export function initSocket(
   };
 }
 
+import { supabase } from './supabaseClient.js';
+
+async function getAuthHeader(): Promise<Record<string, string>> {
+  try {
+    if (supabase) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.access_token) {
+        return { Authorization: `Bearer ${session.access_token}` };
+      }
+    }
+  } catch {}
+  return {};
+}
+
+async function authFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  const authHeaders = await getAuthHeader();
+  const headers = {
+    ...authHeaders,
+    ...((options.headers as Record<string, string>) || {}),
+  };
+  return fetch(url, { ...options, headers });
+}
+
 export async function triggerStart(): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/api/simulator/start`, { method: 'POST' });
+  const res = await authFetch(`${API_BASE_URL}/api/simulator/start`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to start simulator: ${res.statusText}`);
   return res.json();
 }
 
 export async function triggerRate(rate: number): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/api/simulator/rate`, {
+  const res = await authFetch(`${API_BASE_URL}/api/simulator/rate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ rate }),
@@ -60,26 +83,49 @@ export async function triggerRate(rate: number): Promise<any> {
 }
 
 export async function triggerSpike(): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/api/simulator/spike`, { method: 'POST' });
+  const res = await authFetch(`${API_BASE_URL}/api/simulator/spike`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to trigger spike: ${res.statusText}`);
   return res.json();
 }
 
 export async function triggerNormal(): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/api/simulator/normal`, { method: 'POST' });
+  const res = await authFetch(`${API_BASE_URL}/api/simulator/normal`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to return to normal: ${res.statusText}`);
   return res.json();
 }
 
 export async function triggerStop(): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/api/simulator/stop`, { method: 'POST' });
+  const res = await authFetch(`${API_BASE_URL}/api/simulator/stop`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to stop simulator: ${res.statusText}`);
   return res.json();
 }
 
 export async function triggerReset(): Promise<any> {
-  const res = await fetch(`${API_BASE_URL}/api/simulator/reset`, { method: 'POST' });
+  const res = await authFetch(`${API_BASE_URL}/api/simulator/reset`, { method: 'POST' });
   if (!res.ok) throw new Error(`Failed to reset pipeline: ${res.statusText}`);
+  return res.json();
+}
+
+export async function syncHistory(): Promise<{
+  success: boolean;
+  message: string;
+  dbStatus: 'CONNECTED' | 'DEGRADED' | 'OFFLINE';
+  pending: number;
+  totalPersisted: number;
+  lastPersistedAt: number | null;
+  lastSyncedTime: string;
+}> {
+  const res = await authFetch(`${API_BASE_URL}/api/history/sync`, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Sync failed with HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getPersistenceStatus(): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/persistence/status`);
+  if (!res.ok) throw new Error('Failed to fetch persistence status');
   return res.json();
 }
 

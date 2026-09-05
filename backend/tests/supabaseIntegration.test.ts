@@ -238,4 +238,120 @@ describe('Supabase Authentication, Persistence & RLS Integration Suite', () => {
 
     expect(resB.status).not.toBe(401);
   });
+
+  it('verifies automatic event buffering and duplicate event prevention during active run', () => {
+    (historyPersister as any).activeRun = {
+      runId: 'run-auto-123',
+      userId: 'user-auto-123',
+      userToken: 'token-auto-123',
+      scenario: 'CRITICAL_HEAVY',
+      startTime: Date.now(),
+    };
+
+    const event1: PipelineEvent = {
+      id: 'evt_dup_test_1',
+      type: 'PAYMENT',
+      priority: 'CRITICAL',
+      payload: { amount: 500 },
+      createdAt: Date.now(),
+      queuedAt: Date.now(),
+      status: 'PROCESSED',
+      strategy: 'STREAM',
+    };
+
+    // First record: should be buffered
+    historyPersister.recordEvent(event1, 12.4, 'worker-1');
+    expect(historyPersister.getTelemetry().bufferedEventsCount).toBe(1);
+
+    // Duplicate record with identical event ID: must be ignored (preventing duplicate persistence)
+    historyPersister.recordEvent(event1, 14.1, 'worker-2');
+    expect(historyPersister.getTelemetry().bufferedEventsCount).toBe(1);
+
+    // Different event: should be buffered
+    const event2: PipelineEvent = {
+      ...event1,
+      id: 'evt_dup_test_2',
+    };
+    historyPersister.recordEvent(event2, 9.8, 'worker-1');
+    expect(historyPersister.getTelemetry().bufferedEventsCount).toBe(2);
+  });
+
+  it('verifies pre-run event buffering preserves events before run initialization', async () => {
+    // Ensure no active run initially
+    (historyPersister as any).activeRun = null;
+
+    const event: PipelineEvent = {
+      id: 'evt_pre_run_1',
+      type: 'ORDER',
+      priority: 'CRITICAL',
+      payload: {},
+      createdAt: Date.now(),
+      queuedAt: Date.now(),
+      status: 'PROCESSED',
+      strategy: 'STREAM',
+    };
+
+    // Record event before run starts
+    historyPersister.recordEvent(event, 10.0);
+
+    // Mock startRun to succeed
+    vi.spyOn(supabaseClient, 'createScopedClient').mockReturnValue({
+      from: () => ({
+        insert: () => ({
+          select: () => ({
+            single: async () => ({ data: { id: 'new-run-uuid' }, error: null }),
+          }),
+        }),
+      }),
+    } as any);
+
+    // Simulate startRun
+    await historyPersister.startRun('test-user', 'test-token', 'CRITICAL_HEAVY', {});
+
+    // Pre-run event should now be transferred into the active run's event buffer
+    const tel = historyPersister.getTelemetry();
+    expect(tel.activeRunId).toBe('new-run-uuid');
+    expect(tel.bufferedEventsCount).toBe(1);
+  });
+
+  it('verifies POST /api/history/sync forces buffer flush and returns sync telemetry', async () => {
+    vi.spyOn(supabaseClient.authService, 'verifyUserToken').mockResolvedValue({
+      id: 'sync-user-id',
+      email: 'sync@adaptiflow.io',
+    } as any);
+
+    vi.spyOn(historyPersister, 'flushBuffers').mockImplementation(async () => {});
+
+    const res = await request(app)
+      .post('/api/history/sync')
+      .set('Authorization', 'Bearer valid-sync-token');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body).toHaveProperty('dbStatus');
+    expect(res.body).toHaveProperty('pending');
+    expect(res.body).toHaveProperty('lastSyncedTime');
+  });
+
+  it('verifies POST /api/simulator/start automatically creates workload run when authenticated', async () => {
+    vi.spyOn(supabaseClient.authService, 'verifyUserToken').mockResolvedValue({
+      id: 'sim-user-id',
+      email: 'sim@adaptiflow.io',
+    } as any);
+
+    const startRunSpy = vi.spyOn(historyPersister, 'startRun').mockResolvedValue('sim-run-uuid');
+
+    const res = await request(app)
+      .post('/api/simulator/start')
+      .set('Authorization', 'Bearer valid-sim-token');
+
+    expect(res.status).toBe(200);
+    expect(startRunSpy).toHaveBeenCalledWith(
+      'sim-user-id',
+      'valid-sim-token',
+      expect.any(String),
+      expect.any(Object)
+    );
+    expect(simulator.isRunning()).toBe(true);
+  });
 });

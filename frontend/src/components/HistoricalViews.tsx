@@ -199,11 +199,18 @@ export const EventHistoryView: React.FC<{
   user: User | null;
   selectedRunId?: string | null;
   onClearSelectedRun?: () => void;
-}> = ({ user, selectedRunId, onClearSelectedRun }) => {
+  onOpenSignIn?: () => void;
+}> = ({ user, selectedRunId, onClearSelectedRun, onOpenSignIn }) => {
   const [events, setEvents] = useState<EventLogRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // History storage status & sync
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [dbStatus, setDbStatus] = useState<'CONNECTED' | 'DEGRADED' | 'OFFLINE'>('CONNECTED');
+  const [pendingCount, setPendingCount] = useState(0);
+  const [lastSyncedTime, setLastSyncedTime] = useState<string | null>(null);
 
   // Filter States
   const [search, setSearch] = useState('');
@@ -231,6 +238,27 @@ export const EventHistoryView: React.FC<{
       setPage(0);
     }
   }, [selectedRunId]);
+
+  // Fetch persistence status periodically
+  const fetchStatus = async () => {
+    try {
+      const res = await fetch(`${API_BASE}/persistence/status`);
+      if (res.ok) {
+        const data = await res.json();
+        setDbStatus(data.dbStatus || 'CONNECTED');
+        setPendingCount(data.bufferedEventsCount || 0);
+        if (data.lastPersistedAt) {
+          setLastSyncedTime(new Date(data.lastPersistedAt).toLocaleTimeString());
+        }
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    fetchStatus();
+    const timer = setInterval(fetchStatus, 3000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Fetch available runs for the dropdown
   useEffect(() => {
@@ -288,8 +316,9 @@ export const EventHistoryView: React.FC<{
       const data = await res.json();
       setEvents(data.events || []);
       setTotal(data.total || 0);
+      fetchStatus();
     } catch (err: any) {
-      setError(err.message || 'Error fetching events');
+      setError(err.message || 'Unable to load event history');
     } finally {
       setLoading(false);
     }
@@ -315,6 +344,30 @@ export const EventHistoryView: React.FC<{
     setTimeRangeFilter('ALL');
     setPage(0);
     if (onClearSelectedRun) onClearSelectedRun();
+  };
+
+  const handleSyncLatest = async () => {
+    try {
+      setIsSyncing(true);
+      const token = await getSessionToken();
+      const res = await fetch(`${API_BASE}/history/sync`, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setDbStatus(data.dbStatus || 'CONNECTED');
+        setPendingCount(data.pending || 0);
+        if (data.lastSyncedTime) {
+          setLastSyncedTime(data.lastSyncedTime);
+        }
+      }
+      await fetchEvents();
+    } catch (err: any) {
+      console.warn('Sync failed:', err?.message);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   // Determine which filters are active
@@ -354,6 +407,14 @@ export const EventHistoryView: React.FC<{
         <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1.5 leading-relaxed">
           Sign in to view your user-scoped persistent event logs, audit reasons, and latency trails in Supabase.
         </p>
+        {onOpenSignIn && (
+          <button
+            onClick={onOpenSignIn}
+            className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer"
+          >
+            Sign In with AdaptiFlow
+          </button>
+        )}
       </div>
     );
   }
@@ -361,24 +422,70 @@ export const EventHistoryView: React.FC<{
   return (
     <div className="space-y-4">
       {/* Top Banner */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
-          <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+          <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-blue-600 text-[22px]">receipt_long</span>
-            <span>Event History &amp; Audit Log Exploration</span>
-          </h2>
-          <p className="text-xs text-slate-500">
-            Durable PostgreSQL audit records stored in Supabase with user Row Level Security.
+            <h2 className="text-base font-bold text-slate-900">Event History &amp; Audit Log Exploration</h2>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Durable PostgreSQL event records automatically persisted during active pipeline runs.
           </p>
+          <div className="flex flex-wrap items-center gap-3 text-xs font-mono mt-2">
+            <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[11px] font-semibold bg-white shadow-2xs">
+              <span className="text-slate-500 font-sans">History Storage:</span>
+              {dbStatus === 'OFFLINE' ? (
+                <span className="flex items-center gap-1 text-rose-600 font-bold" title="Live processing continues; historical persistence will resume when storage is available.">
+                  <span className="w-2 h-2 rounded-full bg-rose-500" />
+                  Temporarily unavailable
+                </span>
+              ) : isSyncing ? (
+                <span className="flex items-center gap-1 text-blue-600 font-bold">
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+                  Syncing...
+                </span>
+              ) : pendingCount > 0 ? (
+                <span className="flex items-center gap-1 text-amber-600 font-bold" title={`${pendingCount} event records in local buffer awaiting periodic flush`}>
+                  <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                  Delayed ({pendingCount} pending)
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-emerald-600 font-bold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                  Synced
+                </span>
+              )}
+            </div>
+            {lastSyncedTime && (
+              <span className="text-slate-400 text-[11px]">
+                Last synced: <strong className="text-slate-600">{lastSyncedTime}</strong>
+              </span>
+            )}
+            <span className="text-slate-400 text-[11px]">
+              Pending: <strong className="text-slate-600">{pendingCount}</strong>
+            </span>
+          </div>
         </div>
-        <button
-          onClick={fetchEvents}
-          disabled={loading}
-          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
-        >
-          <span className={`material-symbols-outlined text-sm ${loading ? 'animate-spin' : ''}`}>refresh</span>
-          <span>Refresh Records</span>
-        </button>
+
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            onClick={handleSyncLatest}
+            disabled={isSyncing}
+            className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-50"
+            title="Flush pending in-memory persistence buffers and refresh Event History immediately"
+          >
+            <span className={`material-symbols-outlined text-sm ${isSyncing ? 'animate-spin' : ''}`}>sync</span>
+            <span>{isSyncing ? 'Syncing...' : 'Sync Latest'}</span>
+          </button>
+          <button
+            onClick={fetchEvents}
+            disabled={loading}
+            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
+          >
+            <span className={`material-symbols-outlined text-sm ${loading ? 'animate-spin' : ''}`}>refresh</span>
+            <span>Refresh</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter Toolbar */}
@@ -580,7 +687,7 @@ export const EventHistoryView: React.FC<{
         {loading ? (
           <div className="p-12 text-center text-slate-500 text-xs flex flex-col items-center justify-center gap-3">
             <span className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-            <span>Querying Supabase persistent event logs...</span>
+            <span>Loading event history...</span>
           </div>
         ) : error ? (
           <div className="p-8 text-center text-rose-600 text-xs bg-rose-50/50">

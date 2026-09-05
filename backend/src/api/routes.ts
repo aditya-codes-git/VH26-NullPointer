@@ -149,29 +149,83 @@ export function createApiRouter(
   });
 
   // ==========================================================
-  // Simulation Controls (Compatible with Dashboard)
+  // Simulation Controls & Automatic Run Persistence
   // ==========================================================
-  router.post('/simulator/start', (_req, res) => {
+
+  const ensureAutoRunStarted = async (req: any): Promise<string | null> => {
+    if (!historyPersister) return null;
+    const active = historyPersister.getActiveRun();
+    if (active) return active.runId;
+
+    const userId = req.user?.id;
+    const userToken = req.token;
+    if (!userId || !userToken) return null;
+
+    const currentScenario = simulator.getScenario();
+    const workloadConfig = WORKLOAD_CONFIGS[currentScenario] || {};
+    try {
+      return await historyPersister.startRun(userId, userToken, currentScenario, workloadConfig);
+    } catch (err: any) {
+      console.warn('[AutoRun] Failed to automatically create workload run in Supabase:', err?.message);
+      return null;
+    }
+  };
+
+  const finalizeAutoRun = async (): Promise<void> => {
+    if (!historyPersister) return;
+    const active = historyPersister.getActiveRun();
+    if (!active) return;
+
+    try {
+      const snap = metricsCollector.getSnapshot();
+      const runDist = metricsCollector.getRunDistribution();
+
+      await historyPersister.stopRun({
+        actualDistribution: runDist.actual,
+        totalEvents: runDist.runCounts.totalRunReceived,
+        processed: snap.totalProcessed,
+        queued: snap.criticalQueueSize + snap.highQueueSize + snap.lowQueueSize,
+        shed: snap.shedCount ?? (snap.clickShedCount + snap.logShedCount),
+        retries: snap.faultTolerance?.retryAttempts || 0,
+        duplicates: snap.duplicateDetection?.duplicatesDetected || 0,
+        peakPressure: Math.max(snap.criticalQueuePressure, snap.highQueuePressure, snap.lowQueuePressure),
+        maximumWorkers: snap.workerScaling?.maxWorkers || 2,
+        avgLatency: snap.criticalLatencyAvg || 0,
+      });
+    } catch (err: any) {
+      console.warn('[AutoRun] Failed to finalize workload run in Supabase:', err?.message);
+    }
+  };
+
+  router.post('/simulator/start', optionalAuthMiddleware, async (req, res) => {
+    await ensureAutoRunStarted(req);
     simulator.startNormal();
     broadcastTelemetryNow();
-    res.json({ message: 'Simulator started at normal rate (~1,000 events/min)', mode: 'NORMAL' });
+    res.json({
+      message: 'Simulator started at normal rate (~1,000 events/min)',
+      mode: 'NORMAL',
+      runId: historyPersister?.getActiveRun()?.runId || null,
+    });
   });
 
-  router.post('/simulator/rate', (req, res) => {
+  router.post('/simulator/rate', optionalAuthMiddleware, async (req, res) => {
     const rate = Number(req.body?.rate ?? req.body?.eventsPerMin);
     if (!rate || isNaN(rate) || rate < 100 || rate > 100000) {
       return res.status(400).json({ error: 'Invalid rate. Must be a number between 100 and 100,000.' });
     }
+    await ensureAutoRunStarted(req);
     simulator.setRate(rate);
     broadcastTelemetryNow();
     res.json({
       message: `Simulator rate set to ${rate.toLocaleString()} events/min`,
       rate,
       mode: simulator.getMode(),
+      runId: historyPersister?.getActiveRun()?.runId || null,
     });
   });
 
-  router.post('/simulator/spike', (req, res) => {
+  router.post('/simulator/spike', optionalAuthMiddleware, async (req, res) => {
+    await ensureAutoRunStarted(req);
     const customRate = Number(req.body?.rate ?? req.body?.eventsPerMin);
     if (customRate && !isNaN(customRate) && customRate >= 100) {
       simulator.setRate(customRate);
@@ -180,27 +234,39 @@ export function createApiRouter(
         message: `Traffic rate set to ${customRate.toLocaleString()} events/min`,
         rate: customRate,
         mode: simulator.getMode(),
+        runId: historyPersister?.getActiveRun()?.runId || null,
       });
     }
     simulator.triggerSpike();
     broadcastTelemetryNow();
-    res.json({ message: '20x Flash-sale spike triggered (~20,000 events/min)', mode: 'SPIKE' });
+    res.json({
+      message: '20x Flash-sale spike triggered (~20,000 events/min)',
+      mode: 'SPIKE',
+      runId: historyPersister?.getActiveRun()?.runId || null,
+    });
   });
 
-  router.post('/simulator/normal', (_req, res) => {
+  router.post('/simulator/normal', optionalAuthMiddleware, async (req, res) => {
+    await ensureAutoRunStarted(req);
     simulator.startNormal();
     broadcastTelemetryNow();
-    res.json({ message: 'Returned to normal load (~1,000 events/min)', mode: 'NORMAL' });
+    res.json({
+      message: 'Returned to normal load (~1,000 events/min)',
+      mode: 'NORMAL',
+      runId: historyPersister?.getActiveRun()?.runId || null,
+    });
   });
 
-  router.post('/simulator/stop', (_req, res) => {
+  router.post('/simulator/stop', optionalAuthMiddleware, async (_req, res) => {
     simulator.stop();
+    await finalizeAutoRun();
     broadcastTelemetryNow();
     res.json({ message: 'Simulator stopped', mode: 'STOPPED' });
   });
 
-  router.post('/simulator/reset', (_req, res) => {
+  router.post('/simulator/reset', optionalAuthMiddleware, async (_req, res) => {
     simulator.stop();
+    await finalizeAutoRun();
     metricsCollector.reset();
     broadcastTelemetryNow();
     res.json({ message: 'Pipeline and counters reset', status: 'IDLE' });
@@ -646,6 +712,31 @@ export function createApiRouter(
       limit,
       offset,
     });
+  });
+
+  router.post('/history/sync', requireAuthMiddleware, async (_req, res) => {
+    if (!historyPersister) {
+      return res.status(503).json({ error: 'History persistence service is not initialized' });
+    }
+
+    try {
+      await historyPersister.flushBuffers();
+      const tel = historyPersister.getTelemetry();
+
+      res.json({
+        success: true,
+        message: 'History buffer synced to Supabase',
+        dbStatus: tel.dbStatus,
+        pending: tel.bufferedEventsCount,
+        totalPersisted: tel.totalEventsPersisted,
+        lastPersistedAt: tel.lastPersistedAt,
+        lastSyncedTime: tel.lastPersistedAt
+          ? new Date(tel.lastPersistedAt).toLocaleTimeString()
+          : new Date().toLocaleTimeString(),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || 'Failed to sync history buffer' });
+    }
   });
 
   router.get('/history/analytics', requireAuthMiddleware, async (req, res) => {

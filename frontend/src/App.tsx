@@ -591,6 +591,7 @@ export const App: React.FC = () => {
               user={user}
               selectedRunId={selectedRunId}
               onClearSelectedRun={() => setSelectedRunId(null)}
+              onOpenSignIn={() => setIsAuthModalOpen(true)}
             />
           )}
 

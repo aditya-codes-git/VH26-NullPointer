@@ -40,6 +40,11 @@ export class HistoryPersister {
   private scalingBuffer: any[] = [];
   private decisionBuffer: any[] = [];
 
+  // Buffer for events processed before an active run is fully initialized in Supabase
+  private pendingPreRunEvents: Array<{ event: PipelineEvent; latencyMs?: number; workerId?: string }> = [];
+  // Set to prevent duplicate event inserts within the same active run
+  private seenEventIds: Set<string> = new Set();
+
   // Max buffer capacity before oldest entries are discarded to prevent memory leaks if DB is down
   private readonly MAX_BUFFER_SIZE = 5000;
   private readonly BATCH_SIZE = 100;
@@ -122,8 +127,19 @@ export class HistoryPersister {
         scenario,
         startTime: Date.now(),
       };
+      this.seenEventIds.clear();
       this.dbStatus = 'CONNECTED';
       console.log(`[HistoryPersister] Active run created in Supabase: runId=${runId} user=${userId}`);
+
+      // Transfer any events that occurred while run was initiating
+      if (this.pendingPreRunEvents.length > 0) {
+        const pending = [...this.pendingPreRunEvents];
+        this.pendingPreRunEvents = [];
+        for (const p of pending) {
+          this.recordEvent(p.event, p.latencyMs, p.workerId);
+        }
+      }
+
       return runId;
     } catch (err: any) {
       this.recordDbError(err?.message || 'Exception during startRun');
@@ -151,8 +167,24 @@ export class HistoryPersister {
     const { runId, userToken } = this.activeRun;
     const scopedClient = createScopedClient(userToken) || getSupabaseClient();
 
-    // Flush any pending in-flight buffers first
-    await this.flushBuffers();
+    // Drain all remaining in-flight buffers before finalizing run
+    for (let i = 0; i < 10; i++) {
+      const remaining =
+        this.eventBuffer.length +
+        this.retryBuffer.length +
+        this.duplicateBuffer.length +
+        this.scalingBuffer.length +
+        this.decisionBuffer.length;
+      if (remaining === 0) break;
+      await this.flushBuffers();
+      const after =
+        this.eventBuffer.length +
+        this.retryBuffer.length +
+        this.duplicateBuffer.length +
+        this.scalingBuffer.length +
+        this.decisionBuffer.length;
+      if (after >= remaining) break; // Break if no progress due to DB outage
+    }
 
     if (scopedClient) {
       try {
@@ -185,6 +217,7 @@ export class HistoryPersister {
       }
     }
 
+    this.seenEventIds.clear();
     this.activeRun = null;
   }
 
@@ -193,7 +226,21 @@ export class HistoryPersister {
   // ==========================================================
 
   public recordEvent(event: PipelineEvent, latencyMs?: number, workerId?: string): void {
-    if (!this.activeRun) return;
+    if (!this.activeRun) {
+      // Buffer recent events so they are not lost if run is about to start
+      if (this.pendingPreRunEvents.length >= 1000) {
+        this.pendingPreRunEvents.shift();
+      }
+      this.pendingPreRunEvents.push({ event, latencyMs, workerId });
+      return;
+    }
+
+    // Deduplication check for this run
+    if (this.seenEventIds.has(event.id)) {
+      return;
+    }
+    this.seenEventIds.add(event.id);
+
     if (this.eventBuffer.length >= this.MAX_BUFFER_SIZE) {
       this.eventBuffer.shift(); // LRU drop to prevent memory overflow
     }
@@ -307,13 +354,22 @@ export class HistoryPersister {
     const scopedClient = createScopedClient(this.activeRun.userToken) || getSupabaseClient();
     if (!scopedClient) return;
 
-    // 1. Drain batch of event logs
-    if (this.eventBuffer.length > 0) {
+    // 1. Drain batches of event logs (drain up to 5 batches per flush cycle)
+    let eventBatchesFlushed = 0;
+    while (this.eventBuffer.length > 0 && eventBatchesFlushed < 5) {
       const batch = this.eventBuffer.splice(0, this.BATCH_SIZE);
+      eventBatchesFlushed++;
       try {
-        const { error } = await scopedClient.from('event_logs').insert(batch);
+        const { error } = await scopedClient
+          .from('event_logs')
+          .upsert(batch, { onConflict: 'run_id,event_id', ignoreDuplicates: true });
         if (error) {
           this.recordDbError(error.message);
+          // Restore batch if space permits
+          if (this.eventBuffer.length + batch.length <= this.MAX_BUFFER_SIZE) {
+            this.eventBuffer.unshift(...batch);
+          }
+          break;
         } else {
           this.totalEventsPersisted += batch.length;
           this.lastPersistedAt = Date.now();
@@ -321,6 +377,10 @@ export class HistoryPersister {
         }
       } catch (err: any) {
         this.recordDbError(err?.message || 'Error inserting event_logs batch');
+        if (this.eventBuffer.length + batch.length <= this.MAX_BUFFER_SIZE) {
+          this.eventBuffer.unshift(...batch);
+        }
+        break;
       }
     }
 
@@ -329,7 +389,12 @@ export class HistoryPersister {
       const batch = this.retryBuffer.splice(0, this.BATCH_SIZE);
       try {
         const { error } = await scopedClient.from('retry_logs').insert(batch);
-        if (error) this.recordDbError(error.message);
+        if (error) {
+          this.recordDbError(error.message);
+          if (this.retryBuffer.length + batch.length <= this.MAX_BUFFER_SIZE) {
+            this.retryBuffer.unshift(...batch);
+          }
+        }
       } catch (err: any) {
         this.recordDbError(err?.message || 'Error inserting retry_logs');
       }
@@ -340,7 +405,12 @@ export class HistoryPersister {
       const batch = this.duplicateBuffer.splice(0, this.BATCH_SIZE);
       try {
         const { error } = await scopedClient.from('duplicate_logs').insert(batch);
-        if (error) this.recordDbError(error.message);
+        if (error) {
+          this.recordDbError(error.message);
+          if (this.duplicateBuffer.length + batch.length <= this.MAX_BUFFER_SIZE) {
+            this.duplicateBuffer.unshift(...batch);
+          }
+        }
       } catch (err: any) {
         this.recordDbError(err?.message || 'Error inserting duplicate_logs');
       }
@@ -351,7 +421,12 @@ export class HistoryPersister {
       const batch = this.scalingBuffer.splice(0, this.BATCH_SIZE);
       try {
         const { error } = await scopedClient.from('scaling_events').insert(batch);
-        if (error) this.recordDbError(error.message);
+        if (error) {
+          this.recordDbError(error.message);
+          if (this.scalingBuffer.length + batch.length <= this.MAX_BUFFER_SIZE) {
+            this.scalingBuffer.unshift(...batch);
+          }
+        }
       } catch (err: any) {
         this.recordDbError(err?.message || 'Error inserting scaling_events');
       }
@@ -362,7 +437,12 @@ export class HistoryPersister {
       const batch = this.decisionBuffer.splice(0, this.BATCH_SIZE);
       try {
         const { error } = await scopedClient.from('decision_logs').insert(batch);
-        if (error) this.recordDbError(error.message);
+        if (error) {
+          this.recordDbError(error.message);
+          if (this.decisionBuffer.length + batch.length <= this.MAX_BUFFER_SIZE) {
+            this.decisionBuffer.unshift(...batch);
+          }
+        }
       } catch (err: any) {
         this.recordDbError(err?.message || 'Error inserting decision_logs');
       }

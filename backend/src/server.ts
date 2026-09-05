@@ -91,6 +91,7 @@ metricsCollector.registerDecisionEngine(formalizedDecisionEngine);
 // Register persistence callbacks
 retryController.onAuditLog = (entry) => historyPersister.recordRetry(entry);
 duplicateDetector.onDuplicate = (entry) => historyPersister.recordDuplicate(entry);
+sheddingPolicy.onShed = (event) => historyPersister.recordEvent(event);
 
 // Wire worker completion to metrics and persistent history
 workerPool.setListeners(
