@@ -175,7 +175,7 @@ queue_length ≥ T3         ──► Mode: SHED        (Drop non-critical event
 
 ---
 
-## 10. Data Flow Example
+## 10. Data Flowing Example
 
 ### Normal Operation (~1,000 events/min)
 1. Payment event arrives $\rightarrow$ Classified as **Critical** $\rightarrow$ High Priority Queue $\rightarrow$ Streamed immediately to Worker.
