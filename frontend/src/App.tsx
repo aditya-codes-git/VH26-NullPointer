@@ -34,12 +34,57 @@ import {
   AccountView,
 } from './components/HistoricalViews.js';
 
+export type AppRoute =
+  | '/pipeline'
+  | '/history/events'
+  | '/history/runs'
+  | '/analytics'
+  | '/modules/fault-tolerance'
+  | '/modules/worker-scaling'
+  | '/modules/duplicate-shield'
+  | '/modules/decision-engine'
+  | '/account';
+
+const VALID_ROUTES: AppRoute[] = [
+  '/pipeline',
+  '/history/events',
+  '/history/runs',
+  '/analytics',
+  '/modules/fault-tolerance',
+  '/modules/worker-scaling',
+  '/modules/duplicate-shield',
+  '/modules/decision-engine',
+  '/account',
+];
+
+const getInitialRoute = (): AppRoute => {
+  const path = window.location.pathname;
+  const hash = window.location.hash.replace('#', '');
+  const candidate = (path !== '/' && path ? path : hash) as AppRoute;
+  return VALID_ROUTES.includes(candidate) ? candidate : '/pipeline';
+};
+
 export const App: React.FC = () => {
   // Navigation & Supabase Authentication states
-  const [activeTab, setActiveTab] = useState<'live' | 'event-history' | 'run-history' | 'analytics' | 'account'>('live');
+  const [currentRoute, setCurrentRoute] = useState<AppRoute>(getInitialRoute);
   const [user, setUser] = useState<User | null>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
+  const navigate = (route: AppRoute) => {
+    setCurrentRoute(route);
+    if (window.location.pathname !== route) {
+      window.history.pushState(null, '', route);
+    }
+  };
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentRoute(getInitialRoute());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   // Connection and live telemetry states
   const [isConnected, setIsConnected] = useState<boolean>(false);
@@ -103,7 +148,7 @@ export const App: React.FC = () => {
     if (supabase) {
       await supabase.auth.signOut();
       setUser(null);
-      setActiveTab('live');
+      navigate('/pipeline');
     }
   };
 
@@ -340,110 +385,131 @@ export const App: React.FC = () => {
           )}
         </div>
 
-        {/* Primary View Switcher */}
+        {/* Group 1: VIEWS */}
         <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 px-2 mt-1 mb-1">
           Views
         </div>
-        <nav className="flex flex-col gap-1 mb-4">
+        <nav className="flex flex-col gap-1 mb-3">
           <button
-            onClick={() => setActiveTab('live')}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
-              activeTab === 'live'
-                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+            onClick={() => navigate('/pipeline')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/pipeline'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
                 : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
             }`}
           >
-            <span className="material-symbols-outlined text-[20px]">dashboard</span>
+            <span className="material-symbols-outlined text-[18px]">dashboard</span>
             <span>Live Pipeline</span>
           </button>
 
           <button
-            onClick={() => setActiveTab('event-history')}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
-              activeTab === 'event-history'
-                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+            onClick={() => navigate('/history/events')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/history/events'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
                 : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
             }`}
           >
-            <span className="material-symbols-outlined text-[20px]">receipt_long</span>
+            <span className="material-symbols-outlined text-[18px]">receipt_long</span>
             <span>Event History</span>
           </button>
 
           <button
-            onClick={() => setActiveTab('run-history')}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
-              activeTab === 'run-history'
-                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+            onClick={() => navigate('/history/runs')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/history/runs'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
                 : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
             }`}
           >
-            <span className="material-symbols-outlined text-[20px]">history</span>
+            <span className="material-symbols-outlined text-[18px]">history</span>
             <span>Run History</span>
           </button>
 
           <button
-            onClick={() => setActiveTab('analytics')}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
-              activeTab === 'analytics'
-                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+            onClick={() => navigate('/analytics')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/analytics'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
                 : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
             }`}
           >
-            <span className="material-symbols-outlined text-[20px]">insights</span>
+            <span className="material-symbols-outlined text-[18px]">insights</span>
             <span>Analytics</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('account')}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
-              activeTab === 'account'
-                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
-                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
-            }`}
-          >
-            <span className="material-symbols-outlined text-[20px]">account_circle</span>
-            <span>Account</span>
           </button>
         </nav>
 
-        {/* In-Page Quick Links for Live Pipeline */}
-        {activeTab === 'live' && (
-          <>
-            <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 px-2 mt-2 mb-1">
-              Live Modules
-            </div>
-            <nav className="flex flex-col gap-0.5">
-              <a
-                className="flex items-center gap-2.5 px-3 py-1.5 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-[11px] transition-colors"
-                href="#fault-tolerance"
-              >
-                <span className="material-symbols-outlined text-[16px] text-rose-500">health_and_safety</span>
-                <span>Fault Tolerance</span>
-              </a>
-              <a
-                className="flex items-center gap-2.5 px-3 py-1.5 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-[11px] transition-colors"
-                href="#dynamic-worker-scaling"
-              >
-                <span className="material-symbols-outlined text-[16px] text-indigo-500">hub</span>
-                <span>Worker Scaling</span>
-              </a>
-              <a
-                className="flex items-center gap-2.5 px-3 py-1.5 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-[11px] transition-colors"
-                href="#duplicate-detection"
-              >
-                <span className="material-symbols-outlined text-[16px] text-amber-500">content_copy</span>
-                <span>Duplicate Shield</span>
-              </a>
-              <a
-                className="flex items-center gap-2.5 px-3 py-1.5 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-[11px] transition-colors"
-                href="#decision-engine"
-              >
-                <span className="material-symbols-outlined text-[16px] text-purple-500">psychology</span>
-                <span>Decision Engine</span>
-              </a>
-            </nav>
-          </>
-        )}
+        {/* Group 2: PIPELINE MODULES */}
+        <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 px-2 mt-1 mb-1">
+          Pipeline Modules
+        </div>
+        <nav className="flex flex-col gap-1 mb-3">
+          <button
+            onClick={() => navigate('/modules/fault-tolerance')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/modules/fault-tolerance'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px] text-rose-500">health_and_safety</span>
+            <span>Fault Tolerance</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/modules/worker-scaling')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/modules/worker-scaling'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px] text-indigo-500">hub</span>
+            <span>Worker Scaling</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/modules/duplicate-shield')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/modules/duplicate-shield'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px] text-emerald-500">shield</span>
+            <span>Duplicate Shield</span>
+          </button>
+
+          <button
+            onClick={() => navigate('/modules/decision-engine')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/modules/decision-engine'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px] text-purple-500">psychology</span>
+            <span>Decision Engine</span>
+          </button>
+        </nav>
+
+        {/* Group 3: ACCOUNT */}
+        <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 px-2 mt-1 mb-1">
+          Account
+        </div>
+        <nav className="flex flex-col gap-1 mb-2">
+          <button
+            onClick={() => navigate('/account')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
+              currentRoute === '/account'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs font-bold'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px]">account_circle</span>
+            <span>Account</span>
+          </button>
+        </nav>
 
         <div className="mt-auto flex flex-col gap-1 border-t border-[#e2e8f0] pt-3">
           <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-[11px] font-mono mb-1">
@@ -520,25 +586,29 @@ export const App: React.FC = () => {
 
         {/* Main Canvas */}
         <main className="flex-1 p-6 md:p-8 flex flex-col gap-6 max-w-7xl w-full mx-auto">
-          {activeTab === 'event-history' && (
-            <EventHistoryView user={user} selectedRunId={selectedRunId} />
+          {currentRoute === '/history/events' && (
+            <EventHistoryView
+              user={user}
+              selectedRunId={selectedRunId}
+              onClearSelectedRun={() => setSelectedRunId(null)}
+            />
           )}
 
-          {activeTab === 'run-history' && (
+          {currentRoute === '/history/runs' && (
             <RunHistoryView
               user={user}
               onSelectRun={(runId) => {
                 setSelectedRunId(runId);
-                setActiveTab('event-history');
+                navigate('/history/events');
               }}
             />
           )}
 
-          {activeTab === 'analytics' && (
+          {currentRoute === '/analytics' && (
             <HistoricalAnalyticsView user={user} />
           )}
 
-          {activeTab === 'account' && (
+          {currentRoute === '/account' && (
             <AccountView
               user={user}
               onSignOut={handleSignOut}
@@ -546,7 +616,136 @@ export const App: React.FC = () => {
             />
           )}
 
-          {activeTab === 'live' && (
+          {/* Dedicated Module Page: Fault Tolerance */}
+          {currentRoute === '/modules/fault-tolerance' && (
+            <div className="space-y-4 animate-fade-in">
+              <div className="bg-white p-5 rounded-xl border border-[#e2e8f0] shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center font-bold">
+                    <span className="material-symbols-outlined text-[24px]">health_and_safety</span>
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">Fault Tolerance &amp; Resilience Module</h2>
+                    <p className="text-xs text-slate-500">
+                      Per-event exponential backoff retries, dead-letter queue isolation, and transaction idempotency protection.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 bg-rose-50 text-rose-700 border border-rose-200 rounded-full text-xs font-mono font-bold">
+                    Retries: {telemetry?.faultTolerance?.retryAttempts || 0}
+                  </span>
+                  <button
+                    onClick={() => navigate('/pipeline')}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">arrow_back</span>
+                    <span>Live Pipeline</span>
+                  </button>
+                </div>
+              </div>
+              <FaultToleranceSection faultTolerance={telemetry?.faultTolerance} disabled={isPending} />
+            </div>
+          )}
+
+          {/* Dedicated Module Page: Dynamic Worker Scaling */}
+          {currentRoute === '/modules/worker-scaling' && (
+            <div className="space-y-4 animate-fade-in">
+              <div className="bg-white p-5 rounded-xl border border-[#e2e8f0] shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-600 flex items-center justify-center font-bold">
+                    <span className="material-symbols-outlined text-[24px]">hub</span>
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">Dynamic Worker Pool Scaling</h2>
+                    <p className="text-xs text-slate-500">
+                      Autonomous worker elasticity (2 to 8 workers) responding to queue backpressure and priority imbalance.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full text-xs font-mono font-bold">
+                    Workers: {telemetry?.workerScaling?.currentWorkers ?? 4} / {telemetry?.workerScaling?.maxWorkers ?? 8}
+                  </span>
+                  <button
+                    onClick={() => navigate('/pipeline')}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">arrow_back</span>
+                    <span>Live Pipeline</span>
+                  </button>
+                </div>
+              </div>
+              <DynamicWorkerScalingSection workerScaling={telemetry?.workerScaling} disabled={isPending} />
+            </div>
+          )}
+
+          {/* Dedicated Module Page: Duplicate Shield */}
+          {currentRoute === '/modules/duplicate-shield' && (
+            <div className="space-y-4 animate-fade-in">
+              <div className="bg-white p-5 rounded-xl border border-[#e2e8f0] shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center font-bold">
+                    <span className="material-symbols-outlined text-[24px]">shield</span>
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">Duplicate Shield &amp; Admission Defense</h2>
+                    <p className="text-xs text-slate-500">
+                      In-memory 60s TTL LRU deduplication cache safeguarding the ingestion layer against replay attacks.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-xs font-mono font-bold">
+                    Blocked: {telemetry?.duplicateDetection?.duplicatesPrevented ?? 0}
+                  </span>
+                  <button
+                    onClick={() => navigate('/pipeline')}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">arrow_back</span>
+                    <span>Live Pipeline</span>
+                  </button>
+                </div>
+              </div>
+              <DuplicateProtectionSection duplicateDetection={telemetry?.duplicateDetection} disabled={isPending} />
+            </div>
+          )}
+
+          {/* Dedicated Module Page: Decision Engine */}
+          {currentRoute === '/modules/decision-engine' && (
+            <div className="space-y-4 animate-fade-in">
+              <div className="bg-white p-5 rounded-xl border border-[#e2e8f0] shadow-xs flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-50 border border-purple-200 text-purple-600 flex items-center justify-center font-bold">
+                    <span className="material-symbols-outlined text-[24px]">psychology</span>
+                  </div>
+                  <div>
+                    <h2 className="text-base font-bold text-slate-900">Formal Multi-Variable Decision Engine</h2>
+                    <p className="text-xs text-slate-500">
+                      Objective scoring function evaluating CPU load, queue pressure, worker capacity, and degradation cost.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 bg-purple-50 text-purple-700 border border-purple-200 rounded-full text-xs font-mono font-bold">
+                    Score: {telemetry?.decisionFunction?.currentScore ?? 0}/100
+                  </span>
+                  <button
+                    onClick={() => navigate('/pipeline')}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">arrow_back</span>
+                    <span>Live Pipeline</span>
+                  </button>
+                </div>
+              </div>
+              <DecisionEngineSection decisionFunction={telemetry?.decisionFunction} disabled={isPending} />
+            </div>
+          )}
+
+          {/* Live Pipeline View (Overview Only) */}
+          {currentRoute === '/pipeline' && (
             <>
           {/* Alerts */}
           {!isConnected && (
@@ -1047,6 +1246,151 @@ export const App: React.FC = () => {
             </div>
           </section>
 
+          {/* Section 4.5: Compact Pipeline Module Summaries */}
+          <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Fault Tolerance Card */}
+            <div
+              onClick={() => navigate('/modules/fault-tolerance')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-amber-400 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+                      <span className="material-symbols-outlined text-[20px]">restart_alt</span>
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 uppercase font-mono">Fault Tolerance</span>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded text-[10px] font-bold font-mono ${
+                    (telemetry?.faultTolerance?.failureArmed)
+                      ? 'bg-amber-100 text-amber-800'
+                      : (telemetry?.faultTolerance?.retryFailures ?? 0) > 0
+                      ? 'bg-rose-100 text-rose-800'
+                      : 'bg-emerald-100 text-emerald-800'
+                  }`}>
+                    {telemetry?.faultTolerance?.failureArmed ? 'ARMED' : (telemetry?.faultTolerance?.retryAttempts ?? 0) > 0 ? 'ACTIVE' : 'HEALTHY'}
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 block font-sans">Retries</span>
+                    <span className="font-bold text-slate-800">{telemetry?.faultTolerance?.retryAttempts ?? 0}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 block font-sans">Recovered</span>
+                    <span className="font-bold text-emerald-700">{telemetry?.faultTolerance?.retrySuccesses ?? 0}</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-blue-600 group-hover:text-blue-700 font-medium">
+                <span>View Module Dashboard</span>
+                <span className="material-symbols-outlined text-[14px] group-hover:translate-x-0.5 transition-transform">arrow_forward</span>
+              </div>
+            </div>
+
+            {/* Worker Scaling Card */}
+            <div
+              onClick={() => navigate('/modules/worker-scaling')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-indigo-400 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+                      <span className="material-symbols-outlined text-[20px]">hub</span>
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 uppercase font-mono">Worker Scaling</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-indigo-100 text-indigo-800">
+                    {telemetry?.workerScaling?.currentWorkers ?? 4} / {telemetry?.workerScaling?.maxWorkers ?? 8}
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 block font-sans">Utilization</span>
+                    <span className="font-bold text-indigo-700">{telemetry?.workerScaling?.workerUtilization ?? adaptive.workerLoad}%</span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 block font-sans">Pool Scale</span>
+                    <span className="font-bold text-slate-800">{telemetry?.workerScaling?.scaleUpCount ?? 0}↑ {telemetry?.workerScaling?.scaleDownCount ?? 0}↓</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-indigo-600 group-hover:text-indigo-700 font-medium">
+                <span>View Module Dashboard</span>
+                <span className="material-symbols-outlined text-[14px] group-hover:translate-x-0.5 transition-transform">arrow_forward</span>
+              </div>
+            </div>
+
+            {/* Duplicate Shield Card */}
+            <div
+              onClick={() => navigate('/modules/duplicate-shield')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-emerald-400 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                      <span className="material-symbols-outlined text-[20px]">shield</span>
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 uppercase font-mono">Duplicate Shield</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-emerald-100 text-emerald-800">
+                    {telemetry?.duplicateDetection?.duplicatesPrevented ?? 0} BLOCKED
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 block font-sans">LRU Cache</span>
+                    <span className="font-bold text-slate-800">{telemetry?.duplicateDetection?.activeRegistryEntries ?? 0} / {telemetry?.duplicateDetection?.maxRegistryCapacity ?? 50000}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 block font-sans">Window TTL</span>
+                    <span className="font-bold text-emerald-700">{telemetry?.duplicateDetection?.windowTtlSeconds ?? 60}s</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-emerald-600 group-hover:text-emerald-700 font-medium">
+                <span>View Module Dashboard</span>
+                <span className="material-symbols-outlined text-[14px] group-hover:translate-x-0.5 transition-transform">arrow_forward</span>
+              </div>
+            </div>
+
+            {/* Decision Engine Card */}
+            <div
+              onClick={() => navigate('/modules/decision-engine')}
+              className="bg-white p-4 rounded-xl border border-slate-200 hover:border-purple-400 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
+                      <span className="material-symbols-outlined text-[20px]">psychology</span>
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 uppercase font-mono">Decision Engine</span>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-purple-100 text-purple-800">
+                    SCORE: {telemetry?.decisionFunction?.currentScore ?? 0}
+                  </span>
+                </div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs font-mono">
+                  <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 block font-sans">Strategy</span>
+                    <span className="font-bold text-purple-800">{telemetry?.decisionFunction?.currentDecision ?? adaptive.strategy}</span>
+                  </div>
+                  <div className="bg-slate-50 p-2 rounded border border-slate-100">
+                    <span className="text-[10px] text-slate-400 block font-sans">Confidence</span>
+                    <span className="font-bold text-slate-800">{((telemetry?.decisionFunction?.confidence ?? 0.95) * 100).toFixed(0)}%</span>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-purple-600 group-hover:text-purple-700 font-medium">
+                <span>View Module Dashboard</span>
+                <span className="material-symbols-outlined text-[14px] group-hover:translate-x-0.5 transition-transform">arrow_forward</span>
+              </div>
+            </div>
+          </section>
+
           {/* Section 5: Controlled Shedding Audit & Critical Event Protection */}
           <section className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Critical Protection Card (5 Cols) */}
@@ -1328,38 +1672,6 @@ export const App: React.FC = () => {
             </section>
           </div>
 
-          {/* Section: Fault Tolerance with Idempotent Retry (Stretch Goal 1) */}
-          <div id="fault-tolerance">
-            <FaultToleranceSection
-              faultTolerance={telemetry?.faultTolerance}
-              disabled={isPending}
-            />
-          </div>
-
-          {/* Section: Dynamic Worker Scaling (Stretch Goal 2) */}
-          <div id="dynamic-worker-scaling">
-            <DynamicWorkerScalingSection
-              workerScaling={telemetry?.workerScaling}
-              disabled={isPending}
-            />
-          </div>
-
-          {/* Section: Duplicate Event Detection (Stretch Goal 3) */}
-          <div id="duplicate-detection">
-            <DuplicateProtectionSection
-              duplicateDetection={telemetry?.duplicateDetection}
-              disabled={isPending}
-            />
-          </div>
-
-          {/* Section: Formalized Decision Engine (Stretch Goal 4) */}
-          <div id="decision-engine">
-            <DecisionEngineSection
-              decisionFunction={telemetry?.decisionFunction}
-              disabled={isPending}
-            />
-          </div>
-
           {/* Section 8: Event Accounting & Invariant Reconciliation */}
           <section className="bg-white p-5 rounded-xl border border-[#e2e8f0] shadow-xs font-mono text-xs">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3 pb-2 border-b border-slate-100">
@@ -1406,18 +1718,27 @@ export const App: React.FC = () => {
             </div>
           </section>
 
-          {/* Section 9: Real-Time Decision & Shed Activity Feed */}
+          {/* Section 9: Live Event Feed (Bounded Real-Time Buffer) */}
           <section className="bg-white rounded-xl border border-[#e2e8f0] shadow-xs overflow-hidden">
-            <div className="p-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
+            <div className="p-4 border-b border-slate-200 bg-slate-50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-slate-600 text-[18px]">receipt_long</span>
-                <h3 className="text-sm font-bold text-[#131b2e] uppercase font-mono tracking-wider">
-                  Decision &amp; Shed Activity Feed
-                </h3>
+                <div>
+                  <h3 className="text-sm font-bold text-[#131b2e] uppercase font-mono tracking-wider">
+                    Live Event Feed
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Latest {Math.min(activityLogs.length, 25)} streamed events (in-memory buffer)
+                  </p>
+                </div>
               </div>
-              <span className="text-xs text-slate-400 font-mono">
-                Individual event audit ({activityLogs.length} events buffered)
-              </span>
+              <button
+                onClick={() => navigate('/history/events')}
+                className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+              >
+                <span>Explore Full Event History</span>
+                <span className="material-symbols-outlined text-sm">arrow_forward</span>
+              </button>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
@@ -1440,7 +1761,7 @@ export const App: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    activityLogs.map((log) => (
+                    activityLogs.slice(0, 25).map((log) => (
                       <tr key={log.id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-3 px-6 font-mono text-[11px] text-slate-500">{log.id}</td>
                         <td className="py-3 px-6 font-semibold text-slate-800">{log.type}</td>
@@ -1504,7 +1825,7 @@ export const App: React.FC = () => {
         onClose={() => setIsAuthModalOpen(false)}
         onAuthSuccess={() => {
           setIsAuthModalOpen(false);
-          setActiveTab('live');
+          navigate('/pipeline');
         }}
       />
     </div>

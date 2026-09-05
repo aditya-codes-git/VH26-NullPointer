@@ -607,19 +607,32 @@ export function createApiRouter(
 
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const offset = Number(req.query.offset) || 0;
-    const { runId, type, priority, strategy, status, search } = req.query;
+    const { runId, type, priority, strategy, status, search, since, startDate, endDate } = req.query;
 
     let query = client
       .from('event_logs')
       .select('*', { count: 'exact' })
       .order('timestamp', { ascending: false });
 
-    if (runId && typeof runId === 'string') query = query.eq('run_id', runId);
-    if (type && typeof type === 'string') query = query.eq('event_type', type);
-    if (priority && typeof priority === 'string') query = query.eq('priority', priority);
-    if (strategy && typeof strategy === 'string') query = query.eq('strategy', strategy);
-    if (status && typeof status === 'string') query = query.eq('status', status);
-    if (search && typeof search === 'string') query = query.ilike('event_id', `%${search}%`);
+    if (runId && typeof runId === 'string' && runId !== 'ALL') query = query.eq('run_id', runId);
+    if (type && typeof type === 'string' && type !== 'ALL') query = query.eq('event_type', type);
+    if (priority && typeof priority === 'string' && priority !== 'ALL') query = query.eq('priority', priority);
+    if (strategy && typeof strategy === 'string' && strategy !== 'ALL') query = query.eq('strategy', strategy);
+    if (status && typeof status === 'string' && status !== 'ALL') query = query.eq('status', status);
+
+    // Multi-field search across Event ID, Event Type, and Audit Reason
+    if (search && typeof search === 'string' && search.trim()) {
+      const s = search.trim();
+      query = query.or(`event_id.ilike.%${s}%,event_type.ilike.%${s}%,audit_reason.ilike.%${s}%`);
+    }
+
+    // Time-based filtering
+    if (since && typeof since === 'string') {
+      query = query.gte('timestamp', since);
+    } else {
+      if (startDate && typeof startDate === 'string') query = query.gte('timestamp', startDate);
+      if (endDate && typeof endDate === 'string') query = query.lte('timestamp', endDate);
+    }
 
     const { data, error, count } = await query.range(offset, offset + limit - 1);
 
