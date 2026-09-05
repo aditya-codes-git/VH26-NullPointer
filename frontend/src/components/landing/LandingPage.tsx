@@ -19,14 +19,22 @@ import {
   LandingFooter,
 } from './LandingSections.js';
 
+import { User } from '@supabase/supabase-js';
+
 interface LandingPageProps {
+  user: User | null;
+  authLoading: boolean;
   onSignIn: () => void;
+  onAccount: () => void;
   onGetStarted: () => void;
   onViewDemo: () => void;
 }
 
 export const LandingPage: React.FC<LandingPageProps> = ({
+  user,
+  authLoading,
   onSignIn,
+  onAccount,
   onGetStarted,
   onViewDemo,
 }) => {
@@ -34,7 +42,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({
     <div className="min-h-screen bg-white dark:bg-[#080a0d] text-slate-900 dark:text-slate-100 flex flex-col selection:bg-blue-600 selection:text-white transition-colors duration-200">
       {/* Fixed Navigation Bar */}
       <LandingNavbar
+        user={user}
+        authLoading={authLoading}
         onSignIn={onSignIn}
+        onAccount={onAccount}
         onGetStarted={onGetStarted}
         onViewDemo={onViewDemo}
       />

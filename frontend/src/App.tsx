@@ -24,7 +24,7 @@ import { DynamicWorkerScalingSection } from './components/DynamicWorkerScalingSe
 import { DuplicateProtectionSection } from './components/DuplicateProtectionSection.js';
 import { DecisionEngineSection } from './components/DecisionEngineSection.js';
 import { WorkloadProfileSection } from './components/WorkloadProfileSection.js';
-import { supabase, getCurrentUser } from './services/supabaseClient.js';
+import { supabase } from './services/supabaseClient.js';
 import { User } from '@supabase/supabase-js';
 import { AuthModal } from './components/AuthModal.js';
 import {
@@ -74,8 +74,14 @@ export const App: React.FC = () => {
   // Navigation & Supabase Authentication states
   const [currentRoute, setCurrentRoute] = useState<AppRoute>(getInitialRoute);
   const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
+  const currentRouteRef = React.useRef<AppRoute>(currentRoute);
+  useEffect(() => {
+    currentRouteRef.current = currentRoute;
+  }, [currentRoute]);
 
   const navigate = (route: AppRoute) => {
     setCurrentRoute(route);
@@ -137,25 +143,69 @@ export const App: React.FC = () => {
     return cleanup;
   }, []);
 
-  // Supabase Auth State Listener
+  // Supabase Auth State Listener & OAuth callback detection
   useEffect(() => {
-    if (supabase) {
-      getCurrentUser().then((u) => setUser(u));
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        setUser(session?.user || null);
-      });
-      return () => {
-        subscription.unsubscribe();
-      };
+    if (!supabase) {
+      setAuthLoading(false);
+      return;
     }
+
+    const isOAuthReturn =
+      window.location.hash.includes('access_token=') ||
+      window.location.hash.includes('type=recovery') ||
+      window.location.search.includes('code=');
+
+    // 1. Initial Session Check
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+      setAuthLoading(false);
+
+      if (currentUser && isOAuthReturn) {
+        setIsAuthModalOpen(false);
+        navigate('/pipeline');
+      }
+    }).catch(() => {
+      setAuthLoading(false);
+    });
+
+    // 2. Real-time Auth State Change Listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const currentUser = session?.user ?? null;
+      setUser(currentUser);
+      setAuthLoading(false);
+
+      if (event === 'SIGNED_IN' && currentUser) {
+        setIsAuthModalOpen(false);
+        // Navigate to /pipeline if signed in from public landing page or OAuth callback
+        if (currentRouteRef.current === '/' || isOAuthReturn) {
+          navigate('/pipeline');
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        navigate('/');
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
   }, []);
+
+  // Protected Route Guard: unauthenticated users cannot access /pipeline or internal dashboard modules
+  useEffect(() => {
+    if (!authLoading && !user && currentRoute !== '/') {
+      navigate('/');
+      setIsAuthModalOpen(true);
+    }
+  }, [authLoading, user, currentRoute]);
 
   const handleSignOut = async () => {
     if (supabase) {
       await supabase.auth.signOut();
-      setUser(null);
-      navigate('/pipeline');
     }
+    setUser(null);
+    navigate('/');
   };
 
   // Simulation API Trigger Handlers
@@ -355,7 +405,10 @@ export const App: React.FC = () => {
     return (
       <>
         <LandingPage
+          user={user}
+          authLoading={authLoading}
           onSignIn={() => setIsAuthModalOpen(true)}
+          onAccount={() => navigate('/account')}
           onGetStarted={() => {
             if (user) {
               navigate('/pipeline');
@@ -374,6 +427,18 @@ export const App: React.FC = () => {
           }}
         />
       </>
+    );
+  }
+
+  // Auth Loading Screen while validating session on protected dashboard routes
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center gap-3">
+        <img src="/assets/short_logo.png" alt="AdaptiFlow" className="w-12 h-12 object-contain animate-pulse" />
+        <div className="text-xs font-mono text-slate-400 uppercase tracking-widest">
+          Authenticating...
+        </div>
+      </div>
     );
   }
 

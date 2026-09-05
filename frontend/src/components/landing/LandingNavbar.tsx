@@ -1,15 +1,22 @@
 import React, { useState } from 'react';
 import { useTheme } from '../../context/ThemeContext.js';
-import { Sun, Moon, Menu, X, ArrowRight } from 'lucide-react';
+import { Sun, Moon, Menu, X, ArrowRight, User as UserIcon } from 'lucide-react';
+import { User } from '@supabase/supabase-js';
 
 interface LandingNavbarProps {
+  user: User | null;
+  authLoading: boolean;
   onSignIn: () => void;
+  onAccount: () => void;
   onGetStarted: () => void;
   onViewDemo: () => void;
 }
 
 export const LandingNavbar: React.FC<LandingNavbarProps> = ({
+  user,
+  authLoading,
   onSignIn,
+  onAccount,
   onGetStarted,
   onViewDemo,
 }) => {
@@ -81,13 +88,26 @@ export const LandingNavbar: React.FC<LandingNavbarProps> = ({
               )}
             </button>
 
-            {/* Sign In */}
-            <button
-              onClick={onSignIn}
-              className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
-            >
-              Sign In
-            </button>
+            {/* Auth Button: Sign In vs Account */}
+            {authLoading ? (
+              <div className="w-16 h-8 bg-slate-100 dark:bg-slate-800 rounded-lg animate-pulse" />
+            ) : user ? (
+              <button
+                onClick={onAccount}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors border border-slate-200/80 dark:border-slate-800"
+                title={`Signed in as ${user.email}`}
+              >
+                <UserIcon className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                <span>Account</span>
+              </button>
+            ) : (
+              <button
+                onClick={onSignIn}
+                className="px-4 py-2 text-sm font-medium text-slate-700 dark:text-slate-200 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
+              >
+                Sign In
+              </button>
+            )}
 
             {/* Live Demo */}
             <button
@@ -168,15 +188,30 @@ export const LandingNavbar: React.FC<LandingNavbarProps> = ({
             </a>
           </div>
           <div className="pt-3 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-2.5">
-            <button
-              onClick={() => {
-                setMobileMenuOpen(false);
-                onSignIn();
-              }}
-              className="w-full py-2.5 text-center text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-lg"
-            >
-              Sign In
-            </button>
+            {authLoading ? (
+              <div className="w-full h-10 bg-slate-100 dark:bg-slate-800 rounded-lg animate-pulse" />
+            ) : user ? (
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onAccount();
+                }}
+                className="w-full py-2.5 text-center text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-lg flex items-center justify-center gap-2"
+              >
+                <UserIcon className="w-4 h-4 text-blue-600" />
+                <span>Account ({user.email?.split('@')[0]})</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onSignIn();
+                }}
+                className="w-full py-2.5 text-center text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 rounded-lg"
+              >
+                Sign In
+              </button>
+            )}
             <button
               onClick={() => {
                 setMobileMenuOpen(false);
