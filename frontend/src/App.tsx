@@ -315,20 +315,6 @@ export const App: React.FC = () => {
             <span className="material-symbols-outlined text-[20px] text-purple-500">psychology</span>
             <span className="font-semibold text-slate-800">Decision Engine</span>
           </a>
-          <a
-            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
-            href="#"
-          >
-            <span className="material-symbols-outlined text-[20px]">hub</span>
-            <span>Kafka Pipeline</span>
-          </a>
-          <a
-            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
-            href="#"
-          >
-            <span className="material-symbols-outlined text-[20px]">list_alt</span>
-            <span>Audit Trail</span>
-          </a>
         </nav>
 
         <div className="mt-auto flex flex-col gap-1 border-t border-[#e2e8f0] pt-3">
