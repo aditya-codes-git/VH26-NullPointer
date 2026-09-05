@@ -97,9 +97,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onAuthSuc
         {/* Header */}
         <div className="bg-gradient-to-r from-blue-600 to-indigo-700 px-6 py-5 text-white flex justify-between items-center">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-white/20 flex items-center justify-center font-bold text-white text-base">
-              A
-            </div>
+            <img
+              src="/assets/short_logo.png"
+              alt="AdaptiFlow"
+              className="w-8 h-8 rounded-lg bg-white p-0.5 object-contain shadow-xs"
+            />
             <div>
               <h2 className="text-base font-bold leading-tight">AdaptiFlow Account</h2>
               <p className="text-xs text-blue-100">Supabase Authentication & History</p>

@@ -33,8 +33,10 @@ import {
   HistoricalAnalyticsView,
   AccountView,
 } from './components/HistoricalViews.js';
+import { LandingPage } from './components/landing/LandingPage.js';
 
 export type AppRoute =
+  | '/'
   | '/pipeline'
   | '/history/events'
   | '/history/runs'
@@ -46,6 +48,7 @@ export type AppRoute =
   | '/account';
 
 const VALID_ROUTES: AppRoute[] = [
+  '/',
   '/pipeline',
   '/history/events',
   '/history/runs',
@@ -60,8 +63,11 @@ const VALID_ROUTES: AppRoute[] = [
 const getInitialRoute = (): AppRoute => {
   const path = window.location.pathname;
   const hash = window.location.hash.replace('#', '');
+  if (path === '/' && !hash) {
+    return '/';
+  }
   const candidate = (path !== '/' && path ? path : hash) as AppRoute;
-  return VALID_ROUTES.includes(candidate) ? candidate : '/pipeline';
+  return VALID_ROUTES.includes(candidate) ? candidate : '/';
 };
 
 export const App: React.FC = () => {
@@ -344,20 +350,45 @@ export const App: React.FC = () => {
   // Activity & Shedding Logs
   const activityLogs = telemetry?.recentActivityLogs ?? [];
 
+  // Public Product Landing Page
+  if (currentRoute === '/') {
+    return (
+      <>
+        <LandingPage
+          onSignIn={() => setIsAuthModalOpen(true)}
+          onGetStarted={() => {
+            if (user) {
+              navigate('/pipeline');
+            } else {
+              setIsAuthModalOpen(true);
+            }
+          }}
+          onViewDemo={() => navigate('/pipeline')}
+        />
+        <AuthModal
+          isOpen={isAuthModalOpen}
+          onClose={() => setIsAuthModalOpen(false)}
+          onAuthSuccess={() => {
+            setIsAuthModalOpen(false);
+            navigate('/pipeline');
+          }}
+        />
+      </>
+    );
+  }
+
   return (
     <div className="bg-[#ffffff] text-[#131b2e] min-h-screen flex flex-col md:flex-row antialiased">
       {/* -------------------------------------------------- */}
       {/* Side Navigation */}
       {/* -------------------------------------------------- */}
       <aside className="hidden md:flex flex-col h-screen w-[260px] bg-[#ffffff] border-r border-[#e2e8f0] sticky top-0 p-4 gap-2 shrink-0 select-none">
-        <div className="flex items-center gap-3 mb-4 px-2">
-          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center text-white font-bold text-base shadow-sm">
-            AF
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-[#131b2e] leading-tight">AdaptiFlow</h2>
-            <p className="text-[11px] text-[#64748b]">Adaptive Event Pipeline</p>
-          </div>
+        <div className="flex items-center gap-2.5 mb-4 px-1 cursor-pointer" onClick={() => navigate('/')}>
+          <img
+            src="/assets/full_logo.png"
+            alt="AdaptiFlow"
+            className="h-10 w-auto object-contain rounded-lg"
+          />
         </div>
 
         {/* User Account Capsule */}
@@ -390,6 +421,14 @@ export const App: React.FC = () => {
           Views
         </div>
         <nav className="flex flex-col gap-1 mb-3">
+          <button
+            onClick={() => navigate('/')}
+            className="flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]"
+          >
+            <span className="material-symbols-outlined text-[18px]">home</span>
+            <span>Product Home</span>
+          </button>
+
           <button
             onClick={() => navigate('/pipeline')}
             className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left cursor-pointer ${
@@ -543,6 +582,7 @@ export const App: React.FC = () => {
         {/* Top App Bar */}
         <header className="flex justify-between items-center px-8 py-3 w-full sticky top-0 z-40 bg-white border-b border-[#e2e8f0] shadow-2xs">
           <div className="flex items-center gap-3">
+            <img src="/assets/short_logo.png" alt="AdaptiFlow" className="w-8 h-8 object-contain rounded-lg shadow-2xs" />
             <h1 className="text-lg font-bold text-[#004ac6] tracking-tight">AdaptiFlow Event Pipeline</h1>
           </div>
           <div className="flex items-center gap-3">
