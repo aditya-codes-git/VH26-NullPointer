@@ -8,6 +8,10 @@ import { KafkaEventProducer } from '../kafka/producer.js';
 import { getKafkaStatus, isProducerReady, KAFKA_CONFIG } from '../kafka/kafkaClient.js';
 import { RetryController } from '../resilience/retryController.js';
 import { WorkerScaler } from '../workers/workerScaler.js';
+import { DuplicateDetector } from '../resilience/duplicateDetector.js';
+import { PriorityRouter } from '../router/priorityRouter.js';
+import { classifyEvent } from '../classifier/eventClassifier.js';
+import { EventType } from '../models/event.js';
 
 export function createApiRouter(
   simulator: EventSimulator,
@@ -15,7 +19,9 @@ export function createApiRouter(
   config: PipelineConfig,
   kafkaProducer?: KafkaEventProducer,
   retryController?: RetryController,
-  workerScaler?: WorkerScaler
+  workerScaler?: WorkerScaler,
+  duplicateDetector?: DuplicateDetector,
+  priorityRouter?: PriorityRouter
 ): Router {
   const router = Router();
 
@@ -60,33 +66,66 @@ export function createApiRouter(
       return res.status(400).json({ error: 'Missing or invalid required field: timestamp (unix timestamp number)' });
     }
 
-    // 2. Strict 503 if Kafka broker is unavailable (No silent fallback for external ingestion)
-    if (!kafkaProducer || !isProducerReady()) {
+    // 2. Routing: Kafka ingestion if available, or direct priority router fallback
+    if (kafkaProducer && isProducerReady()) {
+      try {
+        await kafkaProducer.publish({
+          id,
+          type,
+          timestamp,
+          payload: payload || {},
+        });
+
+        return res.status(202).json({
+          status: 'accepted',
+          eventId: id,
+          topic: KAFKA_CONFIG.topic,
+        });
+      } catch (err: any) {
+        return res.status(500).json({
+          status: 'rejected',
+          error: `Failed to publish event to Kafka: ${err.message}`,
+          eventId: id,
+        });
+      }
+    } else if (priorityRouter) {
+      // Direct pipeline admission (e.g. offline demo or direct ingestion mode)
+      const priority = classifyEvent(type as EventType);
+      if (duplicateDetector) {
+        const check = duplicateDetector.checkAndRegister(id, type as EventType, priority);
+        if (check.isDuplicate) {
+          broadcastTelemetryNow();
+          return res.status(409).json({
+            status: 'rejected',
+            reason: 'duplicate_blocked',
+            eventId: id,
+            message: check.reason,
+          });
+        }
+      }
+
+      const pipelineEvent = {
+        id,
+        type: type as EventType,
+        priority,
+        payload: payload || {},
+        createdAt: timestamp,
+        queuedAt: Date.now(),
+        status: 'QUEUED' as const,
+      };
+
+      metricsCollector.recordIncomingEvent(pipelineEvent);
+      priorityRouter.route(pipelineEvent);
+      broadcastTelemetryNow();
+
+      return res.status(200).json({
+        status: 'admitted',
+        eventId: id,
+      });
+    } else {
       return res.status(503).json({
         status: 'rejected',
         error: 'Kafka ingestion unavailable: broker not connected',
-        eventId: id,
-      });
-    }
-
-    // 3. Publish to Kafka topic
-    try {
-      await kafkaProducer.publish({
-        id,
-        type,
-        timestamp,
-        payload: payload || {},
-      });
-
-      return res.status(202).json({
-        status: 'accepted',
-        eventId: id,
-        topic: KAFKA_CONFIG.topic,
-      });
-    } catch (err: any) {
-      return res.status(500).json({
-        status: 'rejected',
-        error: `Failed to publish event to Kafka: ${err.message}`,
         eventId: id,
       });
     }
@@ -214,6 +253,78 @@ export function createApiRouter(
     res.json({
       message: 'WorkerScaler evaluation completed',
       telemetry: workerScaler.getTelemetry(),
+    });
+  });
+
+  // ==========================================================
+  // Stretch Goal 3: Duplicate Event Detection Demo Endpoints
+  // ==========================================================
+  router.get('/demo/duplicates', (_req, res) => {
+    if (!duplicateDetector) {
+      return res.status(500).json({ error: 'DuplicateDetector not registered' });
+    }
+    res.json(duplicateDetector.getTelemetry());
+  });
+
+  /**
+   * Demo test: Submits an initial event (accepted as NEW),
+   * then immediately attempts to submit the exact same Event ID (blocked as DUPLICATE).
+   */
+  router.post('/demo/duplicate', (req, res) => {
+    if (!duplicateDetector) {
+      return res.status(500).json({ error: 'DuplicateDetector not registered' });
+    }
+
+    const testEventId = req.body?.eventId || `ORD-DUP-${Math.floor(100000 + Math.random() * 900000)}`;
+    const eventType: EventType = (req.body?.type as EventType) || 'ORDER';
+    const priority = classifyEvent(eventType);
+    const now = Date.now();
+
+    // 1. Initial submission -> NEW (admit)
+    const check1 = duplicateDetector.checkAndRegister(testEventId, eventType, priority);
+    let admittedEvent = false;
+
+    if (!check1.isDuplicate) {
+      admittedEvent = true;
+      if (priorityRouter) {
+        const pipelineEvent = {
+          id: testEventId,
+          type: eventType,
+          priority,
+          payload: req.body?.payload || { item: 'Wireless Headphones', amount: 89.99 },
+          createdAt: now,
+          queuedAt: now,
+          status: 'QUEUED' as const,
+        };
+        metricsCollector.recordIncomingEvent(pipelineEvent);
+        priorityRouter.route(pipelineEvent);
+      }
+    }
+
+    // 2. Duplicate submission -> DUPLICATE (reject immediately, no admission to pipeline)
+    const check2 = duplicateDetector.checkAndRegister(testEventId, eventType, priority);
+
+    // Broadcast updated duplicate detection telemetry via Socket.IO
+    broadcastTelemetryNow();
+
+    return res.json({
+      message: 'Duplicate event admission test executed',
+      firstSubmission: {
+        eventId: testEventId,
+        type: eventType,
+        priority,
+        status: admittedEvent ? 'ADMITTED' : 'ALREADY_EXISTS',
+        isDuplicate: check1.isDuplicate,
+      },
+      secondSubmission: {
+        eventId: testEventId,
+        type: eventType,
+        priority,
+        status: 'REJECTED',
+        isDuplicate: check2.isDuplicate,
+        reason: check2.reason,
+      },
+      telemetry: duplicateDetector.getTelemetry(),
     });
   });
 

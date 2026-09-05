@@ -6,6 +6,7 @@ import { AdaptiveDecisionEngine, SystemPressureState } from '../decision-engine/
 import { EventSimulator } from '../simulator/eventSimulator.js';
 import { RetryController } from '../resilience/retryController.js';
 import { WorkerScaler } from '../workers/workerScaler.js';
+import { DuplicateDetector } from '../resilience/duplicateDetector.js';
 
 export class MetricsCollector {
   private queueManager: QueueManager;
@@ -14,6 +15,7 @@ export class MetricsCollector {
   private adaptiveEngine: AdaptiveDecisionEngine;
   private retryController?: RetryController;
   private workerScaler?: WorkerScaler;
+  private duplicateDetector?: DuplicateDetector;
   private simulator: EventSimulator | null = null;
 
   // Counters
@@ -78,6 +80,10 @@ export class MetricsCollector {
 
   public registerWorkerScaler(scaler: WorkerScaler): void {
     this.workerScaler = scaler;
+  }
+
+  public registerDuplicateDetector(detector: DuplicateDetector): void {
+    this.duplicateDetector = detector;
   }
 
   public registerSimulator(simulator: EventSimulator): void {
@@ -484,6 +490,16 @@ export class MetricsCollector {
             scalingHistory: [],
             workers: [],
           },
+      duplicateDetection: this.duplicateDetector
+        ? this.duplicateDetector.getTelemetry()
+        : {
+            duplicatesDetected: 0,
+            duplicatesPrevented: 0,
+            activeRegistryEntries: 0,
+            maxRegistryCapacity: 10000,
+            windowTtlSeconds: 60,
+            recentDuplicates: [],
+          },
 
       recentShedEvents: this.sheddingPolicy.getRecentLogs(),
       recentActivityLogs: [...this.recentActivityLogs],
@@ -519,6 +535,9 @@ export class MetricsCollector {
     }
     if (this.workerScaler) {
       this.workerScaler.reset();
+    }
+    if (this.duplicateDetector) {
+      this.duplicateDetector.reset();
     }
   }
 }

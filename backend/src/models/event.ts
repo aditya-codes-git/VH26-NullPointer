@@ -107,6 +107,26 @@ export interface FaultToleranceTelemetry {
   recoveryEvents: RecoveryEventSummary[];
 }
 
+export interface DuplicateLogEntry {
+  id: string;
+  eventId: string;
+  type: EventType;
+  priority: EventPriority;
+  timestamp: string; // HH:mm:ss.SSS
+  timestampMs: number;
+  reason: string;
+  originalEventTimestamp?: number;
+}
+
+export interface DuplicateDetectionTelemetry {
+  duplicatesDetected: number;
+  duplicatesPrevented: number;
+  activeRegistryEntries: number;
+  maxRegistryCapacity: number;
+  windowTtlSeconds: number;
+  recentDuplicates: DuplicateLogEntry[];
+}
+
 export interface ShedLogEntry {
   id: string;
   eventId: string;
@@ -274,6 +294,7 @@ export interface TelemetrySnapshot {
   adaptive: AdaptiveTelemetry;
   faultTolerance: FaultToleranceTelemetry;
   workerScaling: WorkerScalingTelemetry;
+  duplicateDetection: DuplicateDetectionTelemetry;
 
   // Logs
   recentShedEvents: ShedLogEntry[];

@@ -4,18 +4,25 @@ import { classifyEvent } from '../classifier/eventClassifier.js';
 import { PriorityRouter } from '../router/priorityRouter.js';
 import { MetricsCollector } from '../metrics/metricsCollector.js';
 import { PipelineEvent, EventType } from '../models/event.js';
+import { DuplicateDetector } from '../resilience/duplicateDetector.js';
 
 export class KafkaEventConsumer {
   private consumer: Consumer;
   private priorityRouter: PriorityRouter;
   private metricsCollector: MetricsCollector;
+  private duplicateDetector?: DuplicateDetector;
   private consumedCount = 0;
   private isRunning = false;
   private isJoined = false;
 
-  constructor(priorityRouter: PriorityRouter, metricsCollector: MetricsCollector) {
+  constructor(
+    priorityRouter: PriorityRouter,
+    metricsCollector: MetricsCollector,
+    duplicateDetector?: DuplicateDetector
+  ) {
     this.priorityRouter = priorityRouter;
     this.metricsCollector = metricsCollector;
+    this.duplicateDetector = duplicateDetector;
     this.consumer = kafka.consumer({
       groupId: KAFKA_CONFIG.groupId,
       retry: {
@@ -93,16 +100,25 @@ export class KafkaEventConsumer {
               status: 'QUEUED',
             };
 
-            // 2. Sampled logging for high-volume scenarios
+            // 2. Duplicate Detection: Check external admission gatekeeper
+            if (this.duplicateDetector) {
+              const check = this.duplicateDetector.checkAndRegister(pipelineEvent.id, pipelineEvent.type, pipelineEvent.priority);
+              if (check.isDuplicate) {
+                console.warn(`[DUPLICATE DETECTOR] Blocked duplicate external event ${pipelineEvent.id} (${pipelineEvent.type}): ${check.reason}`);
+                return; // Do not enqueue, do not record incoming to pipeline
+              }
+            }
+
+            // 3. Sampled logging for high-volume scenarios
             if (this.consumedCount <= 5 || this.consumedCount % 250 === 0) {
               console.log(`[KAFKA CONSUMER] Consumed ${pipelineEvent.id} (${pipelineEvent.type}) from partition ${partition}`);
               console.log(`[PIPELINE] ${pipelineEvent.id} → ${pipelineEvent.priority}`);
             }
 
-            // 3. Record incoming telemetry metric
+            // 4. Record incoming telemetry metric
             this.metricsCollector.recordIncomingEvent(pipelineEvent);
 
-            // 4. Route into isolated priority queues (Let downstream adaptive engine manage flow)
+            // 5. Route into isolated priority queues (Let downstream adaptive engine manage flow)
             this.priorityRouter.route(pipelineEvent);
           } catch (err: any) {
             console.error(`[KAFKA CONSUMER] Error processing message from partition ${partition}: ${err.message}`);

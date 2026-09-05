@@ -110,3 +110,17 @@ export async function triggerEvaluateScale(): Promise<any> {
   if (!res.ok) throw new Error(`Failed to evaluate worker scaling: ${res.statusText}`);
   return res.json();
 }
+
+export async function triggerTestDuplicate(
+  eventId?: string,
+  type?: string
+): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/demo/duplicate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ eventId, type }),
+  });
+  if (!res.ok) throw new Error(`Failed to test duplicate event: ${res.statusText}`);
+  return res.json();
+}
+

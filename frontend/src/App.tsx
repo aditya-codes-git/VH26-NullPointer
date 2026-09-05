@@ -21,6 +21,7 @@ import {
 import { TelemetrySnapshot } from './types/telemetry.js';
 import { FaultToleranceSection } from './components/FaultToleranceSection.js';
 import { DynamicWorkerScalingSection } from './components/DynamicWorkerScalingSection.js';
+import { DuplicateProtectionSection } from './components/DuplicateProtectionSection.js';
 
 export const App: React.FC = () => {
   // Connection and live telemetry states
@@ -293,10 +294,17 @@ export const App: React.FC = () => {
           </a>
           <a
             className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
-            href="#"
+            href="#dynamic-worker-scaling"
           >
-            <span className="material-symbols-outlined text-[20px]">tune</span>
-            <span>Policy Config</span>
+            <span className="material-symbols-outlined text-[20px] text-indigo-500">hub</span>
+            <span className="font-semibold text-slate-800">Worker Scaling</span>
+          </a>
+          <a
+            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
+            href="#duplicate-detection"
+          >
+            <span className="material-symbols-outlined text-[20px] text-amber-500">content_copy</span>
+            <span className="font-semibold text-slate-800">Duplicate Shield</span>
           </a>
           <a
             className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
@@ -1143,6 +1151,14 @@ export const App: React.FC = () => {
           <div id="dynamic-worker-scaling">
             <DynamicWorkerScalingSection
               workerScaling={telemetry?.workerScaling}
+              disabled={isPending}
+            />
+          </div>
+
+          {/* Section: Duplicate Event Detection (Stretch Goal 3) */}
+          <div id="duplicate-detection">
+            <DuplicateProtectionSection
+              duplicateDetection={telemetry?.duplicateDetection}
               disabled={isPending}
             />
           </div>

@@ -19,6 +19,7 @@ import { KafkaEventConsumer } from './kafka/consumer.js';
 import { ensureTopicExists, KAFKA_CONFIG } from './kafka/kafkaClient.js';
 
 import { WorkerScaler } from './workers/workerScaler.js';
+import { DuplicateDetector } from './resilience/duplicateDetector.js';
 
 const app = express();
 app.use(cors());
@@ -31,6 +32,7 @@ const batchProcessor = new BatchProcessor(config, retryController);
 const sheddingPolicy = new SheddingPolicy(queueManager);
 const backpressureController = new BackpressureController(config, queueManager);
 const adaptiveEngine = new AdaptiveDecisionEngine(config, queueManager);
+const duplicateDetector = new DuplicateDetector(60, 10000);
 
 const metricsCollector = new MetricsCollector(
   queueManager,
@@ -39,6 +41,7 @@ const metricsCollector = new MetricsCollector(
   adaptiveEngine,
   retryController
 );
+metricsCollector.registerDuplicateDetector(duplicateDetector);
 
 const priorityRouter = new PriorityRouter(
   queueManager,
@@ -80,7 +83,7 @@ workerPool.setListeners(
 
 // Initialize Kafka Producer & Consumer
 const kafkaProducer = new KafkaEventProducer();
-const kafkaConsumer = new KafkaEventConsumer(priorityRouter, metricsCollector);
+const kafkaConsumer = new KafkaEventConsumer(priorityRouter, metricsCollector, duplicateDetector);
 
 // Initialize Simulator (uses Kafka when available, falls back to direct pipeline for offline dashboard demo)
 const simulator = new EventSimulator(
@@ -89,7 +92,8 @@ const simulator = new EventSimulator(
     metricsCollector.recordIncomingEvent(event);
     priorityRouter.route(event);
   },
-  kafkaProducer
+  kafkaProducer,
+  duplicateDetector
 );
 
 metricsCollector.registerSimulator(simulator);
@@ -100,7 +104,19 @@ workerPool.start();
 workerScaler.start();
 
 // Mount API routes (including POST /api/ingest)
-app.use('/api', createApiRouter(simulator, metricsCollector, config, kafkaProducer, retryController, workerScaler));
+app.use(
+  '/api',
+  createApiRouter(
+    simulator,
+    metricsCollector,
+    config,
+    kafkaProducer,
+    retryController,
+    workerScaler,
+    duplicateDetector,
+    priorityRouter
+  )
+);
 
 const httpServer = createServer(app);
 setupSocketServer(httpServer, metricsCollector, workerPool);

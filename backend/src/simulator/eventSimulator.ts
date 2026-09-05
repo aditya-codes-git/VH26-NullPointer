@@ -4,6 +4,7 @@ import { classifyEvent } from '../classifier/eventClassifier.js';
 import { PipelineConfig } from '../config/pipelineConfig.js';
 import { KafkaEventProducer } from '../kafka/producer.js';
 import { isProducerReady } from '../kafka/kafkaClient.js';
+import { DuplicateDetector } from '../resilience/duplicateDetector.js';
 
 export type SimulatorMode = 'STOPPED' | 'NORMAL' | 'SPIKE' | 'CUSTOM';
 
@@ -13,17 +14,20 @@ export class EventSimulator {
   private config: PipelineConfig;
   private onEventCallback: (event: PipelineEvent) => void;
   private kafkaProducer?: KafkaEventProducer;
+  private duplicateDetector?: DuplicateDetector;
   private isPausedByBackpressure = false;
   private currentRatePerMin = 0;
 
   constructor(
     config: PipelineConfig,
     onEventCallback: (event: PipelineEvent) => void,
-    kafkaProducer?: KafkaEventProducer
+    kafkaProducer?: KafkaEventProducer,
+    duplicateDetector?: DuplicateDetector
   ) {
     this.config = config;
     this.onEventCallback = onEventCallback;
     this.kafkaProducer = kafkaProducer;
+    this.duplicateDetector = duplicateDetector;
   }
 
   public setKafkaProducer(producer: KafkaEventProducer): void {
@@ -118,9 +122,17 @@ export class EventSimulator {
               payload: event.payload,
             })
             .catch(() => {
+              if (this.duplicateDetector) {
+                const check = this.duplicateDetector.checkAndRegister(event.id, event.type, event.priority);
+                if (check.isDuplicate) return;
+              }
               this.onEventCallback(event);
             });
         } else {
+          if (this.duplicateDetector) {
+            const check = this.duplicateDetector.checkAndRegister(event.id, event.type, event.priority);
+            if (check.isDuplicate) continue;
+          }
           this.onEventCallback(event);
         }
       }
