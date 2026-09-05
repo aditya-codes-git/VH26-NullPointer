@@ -14,10 +14,15 @@ from concurrent.futures import ThreadPoolExecutor
 import urllib.request
 import urllib.error
 
-# E-commerce Event Distribution:
-# 10% PAYMENT (Critical), 10% ORDER (Critical), 20% INVENTORY (High), 35% CLICK (Low), 25% LOG (Low)
+# E-commerce Event Types:
 EVENT_TYPES = ['PAYMENT', 'ORDER', 'INVENTORY', 'CLICK', 'LOG']
-EVENT_WEIGHTS = [0.10, 0.10, 0.20, 0.35, 0.25]
+
+# Authoritative Workload Scenario Distributions:
+WORKLOAD_DISTRIBUTIONS = {
+    'CRITICAL_HEAVY': [0.30, 0.30, 0.20, 0.10, 0.10],  # 60% Critical, 20% High, 20% Low
+    'HIGH_HEAVY': [0.10, 0.10, 0.60, 0.10, 0.10],      # 20% Critical, 60% High, 20% Low
+    'LOW_HEAVY': [0.10, 0.10, 0.20, 0.30, 0.30],       # 20% Critical, 20% High, 60% Low
+}
 
 SCENARIO_RATES = {
     'normal': 1000,      # ~1,000 events/min (~16.7 events/sec)
@@ -26,13 +31,23 @@ SCENARIO_RATES = {
 }
 
 class TrafficGenerator:
-    def __init__(self, endpoint: str, rate_per_min: int, duration_sec: int, scenario_name: str, concurrency: int = 20):
+    def __init__(
+        self,
+        endpoint: str,
+        rate_per_min: int,
+        duration_sec: int,
+        scenario_name: str,
+        concurrency: int = 20,
+        workload_scenario: str = 'LOW_HEAVY'
+    ):
         self.endpoint = endpoint
         self.rate_per_min = rate_per_min
         self.rate_per_sec = rate_per_min / 60.0
         self.duration_sec = duration_sec
         self.scenario_name = scenario_name
         self.concurrency = concurrency
+        self.workload_scenario = workload_scenario
+        self.weights = WORKLOAD_DISTRIBUTIONS.get(workload_scenario, WORKLOAD_DISTRIBUTIONS['LOW_HEAVY'])
 
         # Telemetry counters
         self.attempted = 0
@@ -41,8 +56,19 @@ class TrafficGenerator:
         self.broker_unavailable = 0
         self.start_time = 0.0
 
+        # Generated counts by priority
+        self.generated_critical = 0
+        self.generated_high = 0
+        self.generated_low = 0
+
     def generate_event(self) -> dict:
-        event_type = random.choices(EVENT_TYPES, weights=EVENT_WEIGHTS, k=1)[0]
+        event_type = random.choices(EVENT_TYPES, weights=self.weights, k=1)[0]
+        if event_type in ('PAYMENT', 'ORDER'):
+            self.generated_critical += 1
+        elif event_type == 'INVENTORY':
+            self.generated_high += 1
+        else:
+            self.generated_low += 1
         now_ms = int(time.time() * 1000)
         event_id = f"ext_{uuid.uuid4().hex[:10]}"
 
@@ -147,17 +173,42 @@ class TrafficGenerator:
                 print("\n\n[ABORTED] Generator interrupted by user.")
 
         total_elapsed = max(0.1, time.time() - self.start_time)
+        tot_gen = max(1, self.attempted)
         print("\n\n" + "=" * 65)
         print("  RUN SUMMARY")
         print("=" * 65)
         print(f"  Elapsed Time          : {total_elapsed:.2f} seconds")
+        print(f"  Workload Scenario     : {self.workload_scenario}")
         print(f"  Total Attempted       : {self.attempted:,}")
-        print(f"  Successfully Accepted : {self.accepted:,} ({(self.accepted / max(1, self.attempted) * 100):.1f}%)")
+        print(f"  Generated Breakdown   :")
+        print(f"    CRITICAL : {self.generated_critical:,} ({(self.generated_critical / tot_gen * 100):.1f}%)")
+        print(f"    HIGH     : {self.generated_high:,} ({(self.generated_high / tot_gen * 100):.1f}%)")
+        print(f"    LOW      : {self.generated_low:,} ({(self.generated_low / tot_gen * 100):.1f}%)")
+        print(f"  Successfully Accepted : {self.accepted:,} ({(self.accepted / tot_gen * 100):.1f}%)")
         print(f"  Failed (Total)        : {self.failed:,}")
         if self.broker_unavailable > 0:
             print(f"  Kafka Unavailable(503): {self.broker_unavailable:,} (Broker not running)")
         print(f"  Effective Sending Rate: {(self.attempted / total_elapsed) * 60.0:,.0f} events/min")
         print("=" * 65 + "\n")
+
+
+def get_active_backend_workload(endpoint: str) -> str:
+    """Attempts to auto-detect the active workload scenario from backend."""
+    try:
+        parsed = urllib.parse.urlparse(endpoint)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        url = f"{base_url}/api/simulator/workload"
+        req = urllib.request.Request(url, headers={"User-Agent": "Python-TrafficGenerator/1.0"})
+        with urllib.request.urlopen(req, timeout=1.5) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode('utf-8'))
+                scenario = data.get('scenario') or data.get('activeScenario')
+                if scenario in WORKLOAD_DISTRIBUTIONS:
+                    print(f"[*] Auto-synchronized workload with backend: {scenario}")
+                    return scenario
+    except Exception:
+        pass
+    return 'CRITICAL_HEAVY'
 
 
 def main():
@@ -195,8 +246,20 @@ def main():
         default=25,
         help="HTTP worker threads (default: 25)",
     )
+    parser.add_argument(
+        '--workload',
+        type=str,
+        choices=['CRITICAL_HEAVY', 'HIGH_HEAVY', 'LOW_HEAVY', 'AUTO'],
+        default='AUTO',
+        help="Workload scenario: CRITICAL_HEAVY (60% crit), HIGH_HEAVY (60% high), LOW_HEAVY (60% low), or AUTO (sync from backend)",
+    )
 
     args = parser.parse_args()
+
+    # Determine workload scenario
+    workload = args.workload
+    if workload == 'AUTO':
+        workload = get_active_backend_workload(args.endpoint)
 
     # Determine rate
     if args.rate is not None:
@@ -210,8 +273,9 @@ def main():
         endpoint=args.endpoint,
         rate_per_min=rate,
         duration_sec=args.duration,
-        scenario_name=scenario_name,
+        scenario_name=f"{scenario_name} [{workload}]",
         concurrency=args.concurrency,
+        workload_scenario=workload,
     )
     generator.run()
 

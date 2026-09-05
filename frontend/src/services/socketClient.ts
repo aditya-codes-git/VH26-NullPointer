@@ -151,4 +151,31 @@ export async function triggerUpdateDecisionWeights(weights: Record<string, numbe
   return res.json();
 }
 
+export async function getWorkloadConfig(): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/simulator/workload`);
+  if (!res.ok) throw new Error(`Failed to get workload config: ${res.statusText}`);
+  return res.json();
+}
+
+export async function setWorkloadScenario(scenario: string): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/simulator/workload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to set workload scenario: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function resetWorkloadRun(): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/simulator/workload/reset`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to reset run counters: ${res.statusText}`);
+  return res.json();
+}
+
 

@@ -23,6 +23,7 @@ import { FaultToleranceSection } from './components/FaultToleranceSection.js';
 import { DynamicWorkerScalingSection } from './components/DynamicWorkerScalingSection.js';
 import { DuplicateProtectionSection } from './components/DuplicateProtectionSection.js';
 import { DecisionEngineSection } from './components/DecisionEngineSection.js';
+import { WorkloadProfileSection } from './components/WorkloadProfileSection.js';
 
 export const App: React.FC = () => {
   // Connection and live telemetry states
@@ -514,6 +515,13 @@ export const App: React.FC = () => {
               </div>
             </div>
           </section>
+
+          {/* Section 2.5: Workload Profile Selector & Configured vs Actual Control */}
+          <WorkloadProfileSection
+            telemetry={telemetry}
+            onStartTraffic={() => handleApplyRate(sliderRate)}
+            onStopTraffic={handleStop}
+          />
 
           {/* Section 3: Interactive Traffic Rate Slider Controls */}
           <section className="bg-slate-50 p-6 rounded-xl border border-[#e2e8f0] shadow-xs">

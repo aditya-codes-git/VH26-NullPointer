@@ -13,6 +13,11 @@ import { PriorityRouter } from '../router/priorityRouter.js';
 import { FormalizedDecisionEngine } from '../decision-engine/formalizedDecisionEngine.js';
 import { classifyEvent } from '../classifier/eventClassifier.js';
 import { EventType } from '../models/event.js';
+import {
+  WORKLOAD_CONFIGS,
+  WorkloadScenario,
+  isValidWorkloadScenario,
+} from '../config/workloadConfig.js';
 
 export function createApiRouter(
   simulator: EventSimulator,
@@ -189,6 +194,68 @@ export function createApiRouter(
     metricsCollector.reset();
     broadcastTelemetryNow();
     res.json({ message: 'Pipeline and counters reset', status: 'IDLE' });
+  });
+
+  // ==========================================================
+  // Workload Scenario & Distribution Control
+  // ==========================================================
+  router.get('/simulator/workload', (_req, res) => {
+    const currentScenario = simulator.getScenario();
+    const config = WORKLOAD_CONFIGS[currentScenario];
+    const distribution = metricsCollector.getRunDistribution();
+
+    res.json({
+      scenario: currentScenario,
+      activeScenario: currentScenario,
+      config,
+      configuredDistribution: config,
+      configuredEventDistribution: config.eventDistribution,
+      configuredPriorityDistribution: config.priorityDistribution,
+      actualDistribution: distribution.actual,
+      runEventCounts: distribution.runCounts,
+      isRunActive: simulator.isRunning(),
+    });
+  });
+
+  router.post('/simulator/workload', (req, res) => {
+    const { scenario } = req.body || {};
+
+    if (!scenario || !isValidWorkloadScenario(scenario)) {
+      return res.status(400).json({
+        error: `Invalid workload scenario: "${scenario}". Valid scenarios are: CRITICAL_HEAVY, HIGH_HEAVY, LOW_HEAVY`,
+      });
+    }
+
+    if (simulator.isRunning()) {
+      return res.status(409).json({
+        error: 'Cannot switch workload scenario while traffic is actively running. Stop traffic first.',
+        activeScenario: simulator.getScenario(),
+        isRunning: true,
+      });
+    }
+
+    simulator.setScenario(scenario);
+    metricsCollector.resetRunCounters();
+    broadcastTelemetryNow();
+
+    const config = WORKLOAD_CONFIGS[scenario];
+    res.json({
+      message: `Workload scenario set to ${scenario}`,
+      scenario,
+      config,
+      configuredDistribution: config,
+      configuredEventDistribution: config.eventDistribution,
+      configuredPriorityDistribution: config.priorityDistribution,
+    });
+  });
+
+  router.post('/simulator/workload/reset', (_req, res) => {
+    metricsCollector.resetRunCounters();
+    broadcastTelemetryNow();
+    res.json({
+      message: 'Run distribution counters reset',
+      runCounts: metricsCollector.getRunDistribution().runCounts,
+    });
   });
 
   router.post('/benchmark/run', async (req, res) => {

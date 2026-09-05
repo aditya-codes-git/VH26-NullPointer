@@ -1,4 +1,12 @@
-import { PipelineEvent, TelemetrySnapshot, ActivityLogEntry, BatchSizeObservation } from '../models/event.js';
+import {
+  PipelineEvent,
+  TelemetrySnapshot,
+  ActivityLogEntry,
+  BatchSizeObservation,
+  WorkloadTelemetry,
+  WorkloadDistributionBreakdown,
+  WorkloadRunCounts,
+} from '../models/event.js';
 import { QueueManager } from '../queues/queueManager.js';
 import { SheddingPolicy } from '../backpressure/sheddingPolicy.js';
 import { BackpressureController } from '../backpressure/backpressureController.js';
@@ -8,6 +16,7 @@ import { RetryController } from '../resilience/retryController.js';
 import { WorkerScaler } from '../workers/workerScaler.js';
 import { DuplicateDetector } from '../resilience/duplicateDetector.js';
 import { FormalizedDecisionEngine } from '../decision-engine/formalizedDecisionEngine.js';
+import { WORKLOAD_CONFIGS, WorkloadScenario, DEFAULT_WORKLOAD_SCENARIO } from '../config/workloadConfig.js';
 
 export class MetricsCollector {
   private queueManager: QueueManager;
@@ -45,9 +54,30 @@ export class MetricsCollector {
   public batchedCount = 0;
   public deferredCount = 0;
 
+  // Run-specific workload distribution counters (isolated per scenario run)
+  public runPaymentReceived = 0;
+  public runOrderReceived = 0;
+  public runInventoryReceived = 0;
+  public runClickReceived = 0;
+  public runLogReceived = 0;
+  public runCriticalReceived = 0;
+  public runHighReceived = 0;
+  public runLowReceived = 0;
+  public runTotalReceived = 0;
+  public runStartedAt: number = Date.now();
+
   // Rolling rate tracking (1-second sliding windows)
   private incomingTimestamps: number[] = [];
   private processedTimestamps: number[] = [];
+
+  // Rolling rate tracking per priority tier (1-second sliding windows)
+  private incomingCriticalTimestamps: number[] = [];
+  private incomingHighTimestamps: number[] = [];
+  private incomingLowTimestamps: number[] = [];
+
+  private processedCriticalTimestamps: number[] = [];
+  private processedHighTimestamps: number[] = [];
+  private processedLowTimestamps: number[] = [];
 
   // Latency samples (last 500 samples each)
   private criticalLatencies: number[] = [];
@@ -117,19 +147,105 @@ export class MetricsCollector {
   public recordIncomingEvent(event: PipelineEvent): void {
     const now = Date.now();
     this.totalReceived++;
+    this.runTotalReceived++;
     this.incomingTimestamps.push(now);
 
+    // Track actual event type received in current workload run
+    switch (event.type) {
+      case 'PAYMENT':
+        this.runPaymentReceived++;
+        break;
+      case 'ORDER':
+        this.runOrderReceived++;
+        break;
+      case 'INVENTORY':
+        this.runInventoryReceived++;
+        break;
+      case 'CLICK':
+        this.runClickReceived++;
+        break;
+      case 'LOG':
+        this.runLogReceived++;
+        break;
+    }
+
+    // Track actual priority received in current workload run
     switch (event.priority) {
       case 'CRITICAL':
         this.criticalReceived++;
+        this.runCriticalReceived++;
+        this.incomingCriticalTimestamps.push(now);
         break;
       case 'HIGH':
         this.highReceived++;
+        this.runHighReceived++;
+        this.incomingHighTimestamps.push(now);
         break;
       case 'LOW':
         this.lowReceived++;
+        this.runLowReceived++;
+        this.incomingLowTimestamps.push(now);
         break;
     }
+  }
+
+  public resetRunCounters(): void {
+    this.runPaymentReceived = 0;
+    this.runOrderReceived = 0;
+    this.runInventoryReceived = 0;
+    this.runClickReceived = 0;
+    this.runLogReceived = 0;
+    this.runCriticalReceived = 0;
+    this.runHighReceived = 0;
+    this.runLowReceived = 0;
+    this.runTotalReceived = 0;
+    this.runStartedAt = Date.now();
+  }
+
+  public getRunDistribution(): {
+    configured: WorkloadDistributionBreakdown;
+    actual: WorkloadDistributionBreakdown;
+    runCounts: WorkloadRunCounts;
+  } {
+    const currentScenario: WorkloadScenario = this.simulator ? this.simulator.getScenario() : DEFAULT_WORKLOAD_SCENARIO;
+    const scenarioConfig = WORKLOAD_CONFIGS[currentScenario];
+    const totalRun = this.runTotalReceived;
+
+    const actual: WorkloadDistributionBreakdown = {
+      PAYMENT: totalRun > 0 ? Number(((this.runPaymentReceived / totalRun) * 100).toFixed(1)) : 0,
+      ORDER: totalRun > 0 ? Number(((this.runOrderReceived / totalRun) * 100).toFixed(1)) : 0,
+      INVENTORY: totalRun > 0 ? Number(((this.runInventoryReceived / totalRun) * 100).toFixed(1)) : 0,
+      CLICK: totalRun > 0 ? Number(((this.runClickReceived / totalRun) * 100).toFixed(1)) : 0,
+      LOG: totalRun > 0 ? Number(((this.runLogReceived / totalRun) * 100).toFixed(1)) : 0,
+      CRITICAL: totalRun > 0 ? Number(((this.runCriticalReceived / totalRun) * 100).toFixed(1)) : 0,
+      HIGH: totalRun > 0 ? Number(((this.runHighReceived / totalRun) * 100).toFixed(1)) : 0,
+      LOW: totalRun > 0 ? Number(((this.runLowReceived / totalRun) * 100).toFixed(1)) : 0,
+    };
+
+    const configured: WorkloadDistributionBreakdown = {
+      PAYMENT: scenarioConfig.eventDistribution.PAYMENT,
+      ORDER: scenarioConfig.eventDistribution.ORDER,
+      INVENTORY: scenarioConfig.eventDistribution.INVENTORY,
+      CLICK: scenarioConfig.eventDistribution.CLICK,
+      LOG: scenarioConfig.eventDistribution.LOG,
+      CRITICAL: scenarioConfig.priorityDistribution.CRITICAL,
+      HIGH: scenarioConfig.priorityDistribution.HIGH,
+      LOW: scenarioConfig.priorityDistribution.LOW,
+    };
+
+    const runCounts: WorkloadRunCounts = {
+      paymentReceived: this.runPaymentReceived,
+      orderReceived: this.runOrderReceived,
+      inventoryReceived: this.runInventoryReceived,
+      clickReceived: this.runClickReceived,
+      logReceived: this.runLogReceived,
+      criticalReceived: this.runCriticalReceived,
+      highReceived: this.runHighReceived,
+      lowReceived: this.runLowReceived,
+      totalRunReceived: totalRun,
+    };
+
+    return { configured, actual, runCounts };
   }
 
   public recordProcessedEvent(event: PipelineEvent, latencyMs: number): void {
@@ -139,6 +255,7 @@ export class MetricsCollector {
 
     if (event.priority === 'CRITICAL') {
       this.criticalProcessed++;
+      this.processedCriticalTimestamps.push(now);
       this.criticalLatencies.push(latencyMs);
       if (this.criticalLatencies.length > this.maxLatencySamples) {
         this.criticalLatencies.shift();
@@ -156,6 +273,7 @@ export class MetricsCollector {
     } else {
       if (event.priority === 'HIGH') {
         this.highProcessed++;
+        this.processedHighTimestamps.push(now);
         this.addActivityLog({
           id: event.id,
           type: event.type,
@@ -168,6 +286,7 @@ export class MetricsCollector {
         });
       } else {
         this.lowProcessed++;
+        this.processedLowTimestamps.push(now);
         this.addActivityLog({
           id: event.id,
           type: event.type,
@@ -199,6 +318,7 @@ export class MetricsCollector {
 
     for (const event of events) {
       this.processedTimestamps.push(now);
+      this.processedLowTimestamps.push(now);
       this.lowProcessed++;
       const latencyMs = now - event.createdAt;
       this.nonCriticalLatencies.push(latencyMs);
@@ -246,6 +366,48 @@ export class MetricsCollector {
     return {
       incomingPerSec: this.incomingTimestamps.length,
       processedPerSec: this.processedTimestamps.length,
+    };
+  }
+
+  public getRollingWindowMetrics(): {
+    windowCounts: { critical: number; high: number; low: number; total: number };
+    windowPercentages: { critical: number; high: number; low: number };
+    processedPerSec: { critical: number; high: number; low: number; total: number };
+  } {
+    const now = Date.now();
+    const windowStart = now - 1000;
+
+    this.incomingCriticalTimestamps = this.incomingCriticalTimestamps.filter((t) => t >= windowStart);
+    this.incomingHighTimestamps = this.incomingHighTimestamps.filter((t) => t >= windowStart);
+    this.incomingLowTimestamps = this.incomingLowTimestamps.filter((t) => t >= windowStart);
+
+    this.processedCriticalTimestamps = this.processedCriticalTimestamps.filter((t) => t >= windowStart);
+    this.processedHighTimestamps = this.processedHighTimestamps.filter((t) => t >= windowStart);
+    this.processedLowTimestamps = this.processedLowTimestamps.filter((t) => t >= windowStart);
+
+    const critIn = this.incomingCriticalTimestamps.length;
+    const highIn = this.incomingHighTimestamps.length;
+    const lowIn = this.incomingLowTimestamps.length;
+    const totalIn = critIn + highIn + lowIn;
+
+    return {
+      windowCounts: {
+        critical: critIn,
+        high: highIn,
+        low: lowIn,
+        total: totalIn,
+      },
+      windowPercentages: {
+        critical: totalIn > 0 ? Number(((critIn / totalIn) * 100).toFixed(1)) : 0,
+        high: totalIn > 0 ? Number(((highIn / totalIn) * 100).toFixed(1)) : 0,
+        low: totalIn > 0 ? Number(((lowIn / totalIn) * 100).toFixed(1)) : 0,
+      },
+      processedPerSec: {
+        critical: this.processedCriticalTimestamps.length,
+        high: this.processedHighTimestamps.length,
+        low: this.processedLowTimestamps.length,
+        total: this.processedCriticalTimestamps.length + this.processedHighTimestamps.length + this.processedLowTimestamps.length,
+      },
     };
   }
 
@@ -515,6 +677,19 @@ export class MetricsCollector {
       decisionFunction: this.decisionEngine
         ? this.decisionEngine.getTelemetry()
         : undefined,
+      workload: {
+        activeWorkloadScenario: this.simulator ? this.simulator.getScenario() : DEFAULT_WORKLOAD_SCENARIO,
+        scenarioName: WORKLOAD_CONFIGS[this.simulator ? this.simulator.getScenario() : DEFAULT_WORKLOAD_SCENARIO].name,
+        description: WORKLOAD_CONFIGS[this.simulator ? this.simulator.getScenario() : DEFAULT_WORKLOAD_SCENARIO].description,
+        configuredDistribution: this.getRunDistribution().configured,
+        actualDistribution: this.getRunDistribution().actual,
+        runEventCounts: this.getRunDistribution().runCounts,
+        windowCounts: this.getRollingWindowMetrics().windowCounts,
+        windowPercentages: this.getRollingWindowMetrics().windowPercentages,
+        processedPerSec: this.getRollingWindowMetrics().processedPerSec,
+        isRunActive: this.simulator ? this.simulator.isRunning() : false,
+        runStartedAt: this.runStartedAt,
+      },
 
       recentShedEvents: this.sheddingPolicy.getRecentLogs(),
       recentActivityLogs: [...this.recentActivityLogs],
@@ -522,6 +697,7 @@ export class MetricsCollector {
   }
 
   public reset(): void {
+    this.resetRunCounters();
     this.totalReceived = 0;
     this.totalProcessed = 0;
     this.criticalReceived = 0;
@@ -539,6 +715,12 @@ export class MetricsCollector {
     this.deferredCount = 0;
     this.incomingTimestamps = [];
     this.processedTimestamps = [];
+    this.incomingCriticalTimestamps = [];
+    this.incomingHighTimestamps = [];
+    this.incomingLowTimestamps = [];
+    this.processedCriticalTimestamps = [];
+    this.processedHighTimestamps = [];
+    this.processedLowTimestamps = [];
     this.criticalLatencies = [];
     this.nonCriticalLatencies = [];
     this.recentActivityLogs = [];

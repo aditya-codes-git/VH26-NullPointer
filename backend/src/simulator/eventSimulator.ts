@@ -1,10 +1,15 @@
 import { nanoid } from 'nanoid';
-import { EventType, PipelineEvent } from '../models/event.js';
+import { EventType, PipelineEvent, WorkloadScenario } from '../models/event.js';
 import { classifyEvent } from '../classifier/eventClassifier.js';
 import { PipelineConfig } from '../config/pipelineConfig.js';
 import { KafkaEventProducer } from '../kafka/producer.js';
 import { isProducerReady } from '../kafka/kafkaClient.js';
 import { DuplicateDetector } from '../resilience/duplicateDetector.js';
+import {
+  sampleEventTypeForScenario,
+  isValidWorkloadScenario,
+  DEFAULT_WORKLOAD_SCENARIO,
+} from '../config/workloadConfig.js';
 
 export type SimulatorMode = 'STOPPED' | 'NORMAL' | 'SPIKE' | 'CUSTOM';
 
@@ -17,6 +22,7 @@ export class EventSimulator {
   private duplicateDetector?: DuplicateDetector;
   private isPausedByBackpressure = false;
   private currentRatePerMin = 0;
+  private currentScenario: WorkloadScenario = DEFAULT_WORKLOAD_SCENARIO;
 
   constructor(
     config: PipelineConfig,
@@ -40,6 +46,24 @@ export class EventSimulator {
 
   public getCurrentRate(): number {
     return this.currentRatePerMin;
+  }
+
+  public isRunning(): boolean {
+    return this.mode !== 'STOPPED';
+  }
+
+  public getScenario(): WorkloadScenario {
+    return this.currentScenario;
+  }
+
+  public setScenario(scenario: WorkloadScenario): void {
+    if (!isValidWorkloadScenario(scenario)) {
+      throw new Error(`Invalid workload scenario: "${scenario}". Valid scenarios are: CRITICAL_HEAVY, HIGH_HEAVY, LOW_HEAVY`);
+    }
+    if (this.isRunning()) {
+      throw new Error('Cannot change workload scenario while traffic is actively running. Stop traffic first.');
+    }
+    this.currentScenario = scenario;
   }
 
   public isPaused(): boolean {
@@ -140,23 +164,8 @@ export class EventSimulator {
   }
 
   private generateRandomEvent(): PipelineEvent {
-    // E-commerce distribution:
-    // 10% PAYMENT, 10% ORDER, 20% INVENTORY, 35% CLICK, 25% LOG
-    const roll = Math.random();
-    let type: EventType;
-
-    if (roll < 0.1) {
-      type = 'PAYMENT';
-    } else if (roll < 0.2) {
-      type = 'ORDER';
-    } else if (roll < 0.4) {
-      type = 'INVENTORY';
-    } else if (roll < 0.75) {
-      type = 'CLICK';
-    } else {
-      type = 'LOG';
-    }
-
+    // Dynamically sample event type based on active workload scenario
+    const type = sampleEventTypeForScenario(this.currentScenario);
     const priority = classifyEvent(type);
     const now = Date.now();
 

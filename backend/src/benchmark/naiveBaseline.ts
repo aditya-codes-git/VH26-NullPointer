@@ -1,6 +1,7 @@
-import { PipelineEvent, EventType } from '../models/event.js';
+import { PipelineEvent, EventType, WorkloadScenario } from '../models/event.js';
 import { classifyEvent } from '../classifier/eventClassifier.js';
 import { nanoid } from 'nanoid';
+import { sampleEventTypeForScenario, DEFAULT_WORKLOAD_SCENARIO } from '../config/workloadConfig.js';
 
 export interface BenchmarkMetrics {
   totalProcessed: number;
@@ -28,19 +29,14 @@ export interface BenchmarkComparison {
  */
 export async function runBenchmarkComparison(
   eventCount = 2000,
-  spikeArrivalIntervalMs = 3 // ~333 events/sec (20,000/min)
+  spikeArrivalIntervalMs = 3, // ~333 events/sec (20,000/min)
+  scenario: WorkloadScenario = DEFAULT_WORKLOAD_SCENARIO
 ): Promise<BenchmarkComparison> {
   // Generate identical workload
   const events: { id: string; type: EventType; priority: 'CRITICAL' | 'HIGH' | 'LOW'; arrivalTime: number }[] = [];
   
   for (let i = 0; i < eventCount; i++) {
-    const roll = Math.random();
-    let type: EventType;
-    if (roll < 0.10) type = 'PAYMENT';
-    else if (roll < 0.20) type = 'ORDER';
-    else if (roll < 0.40) type = 'INVENTORY';
-    else if (roll < 0.75) type = 'CLICK';
-    else type = 'LOG';
+    const type = sampleEventTypeForScenario(scenario);
 
     events.push({
       id: nanoid(8),

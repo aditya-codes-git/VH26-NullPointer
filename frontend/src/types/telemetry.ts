@@ -237,6 +237,59 @@ export interface DecisionFunctionTelemetry {
   decisionHistory: DecisionSnapshotEntry[];
 }
 
+export type WorkloadScenario = 'CRITICAL_HEAVY' | 'HIGH_HEAVY' | 'LOW_HEAVY';
+
+export interface WorkloadDistributionBreakdown {
+  PAYMENT: number;
+  ORDER: number;
+  INVENTORY: number;
+  CLICK: number;
+  LOG: number;
+  CRITICAL: number;
+  HIGH: number;
+  LOW: number;
+}
+
+export interface WorkloadRunCounts {
+  paymentReceived: number;
+  orderReceived: number;
+  inventoryReceived: number;
+  clickReceived: number;
+  logReceived: number;
+  criticalReceived: number;
+  highReceived: number;
+  lowReceived: number;
+  totalRunReceived: number;
+}
+
+export interface WorkloadTelemetry {
+  activeWorkloadScenario: WorkloadScenario;
+  scenarioName: string;
+  description: string;
+  configuredDistribution: WorkloadDistributionBreakdown;
+  actualDistribution: WorkloadDistributionBreakdown;
+  runEventCounts: WorkloadRunCounts;
+  windowCounts: {
+    critical: number;
+    high: number;
+    low: number;
+    total: number;
+  };
+  windowPercentages: {
+    critical: number;
+    high: number;
+    low: number;
+  };
+  processedPerSec: {
+    critical: number;
+    high: number;
+    low: number;
+    total: number;
+  };
+  isRunActive: boolean;
+  runStartedAt?: number;
+}
+
 export interface TelemetrySnapshot {
   timestamp: number;
   systemStatus: 'IDLE' | 'RUNNING';
@@ -334,6 +387,7 @@ export interface TelemetrySnapshot {
   workerScaling?: WorkerScalingTelemetry;
   duplicateDetection?: DuplicateDetectionTelemetry;
   decisionFunction?: DecisionFunctionTelemetry;
+  workload?: WorkloadTelemetry;
 
   // Logs
   recentShedEvents: ShedLogEntry[];
