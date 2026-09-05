@@ -20,6 +20,7 @@ import { ensureTopicExists, KAFKA_CONFIG } from './kafka/kafkaClient.js';
 
 import { WorkerScaler } from './workers/workerScaler.js';
 import { DuplicateDetector } from './resilience/duplicateDetector.js';
+import { FormalizedDecisionEngine } from './decision-engine/formalizedDecisionEngine.js';
 
 const app = express();
 app.use(cors());
@@ -71,6 +72,17 @@ const workerScaler = new WorkerScaler(
 );
 metricsCollector.registerWorkerScaler(workerScaler);
 
+// Formalized Decision Engine
+const formalizedDecisionEngine = new FormalizedDecisionEngine(
+  config,
+  queueManager,
+  adaptiveEngine,
+  workerPool,
+  workerScaler,
+  metricsCollector
+);
+metricsCollector.registerDecisionEngine(formalizedDecisionEngine);
+
 // Wire worker completion to metrics
 workerPool.setListeners(
   ({ event, latencyMs }) => {
@@ -114,7 +126,8 @@ app.use(
     retryController,
     workerScaler,
     duplicateDetector,
-    priorityRouter
+    priorityRouter,
+    formalizedDecisionEngine
   )
 );
 

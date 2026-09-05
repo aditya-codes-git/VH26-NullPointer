@@ -173,6 +173,70 @@ export interface AdaptiveTelemetry {
   sheddingStatus: 'ENABLED' | 'DISABLED';
 }
 
+// ==========================================================
+// Stretch Goal 4: Formalized Decision Function Telemetry
+// ==========================================================
+export interface DecisionWeights {
+  queuePressure: number;
+  workerUtilization: number;
+  latency: number;
+  dataSize: number;
+  costPressure: number;
+  priority: number;
+}
+
+export interface DecisionInputs {
+  queuePressure: number;
+  workerUtilization: number;
+  latency: number;
+  latencyMs: number;
+  dataSize: number;
+  dataSizeBytes: number;
+  costPressure: number;
+  priority: number;
+  priorityName: EventPriority;
+}
+
+export interface DecisionContributions {
+  queuePressure: number;
+  workerUtilization: number;
+  latency: number;
+  dataSize: number;
+  costPressure: number;
+  priority: number;
+}
+
+export interface DecisionSnapshotEntry {
+  id: string;
+  timestamp: string;
+  timestampMs: number;
+  decision: ProcessingStrategy;
+  score: number;
+  queuePressurePercent: number;
+  workerUtilizationPercent: number;
+  latencyMs: number;
+  dataSizeBytes: number;
+  costPressurePercent: number;
+  priority: EventPriority;
+  topReasons: string[];
+  explanation: string;
+  confidence: number;
+}
+
+export interface DecisionFunctionTelemetry {
+  currentDecision: ProcessingStrategy;
+  currentScore: number;
+  confidence: number;
+  weights: DecisionWeights;
+  currentInputs: DecisionInputs;
+  currentContributions: DecisionContributions;
+  currentReasons: string[];
+  explanation: string;
+  lastUpdated: string;
+  lastUpdatedMs: number;
+  decisionHistory: DecisionSnapshotEntry[];
+}
+
 export interface TelemetrySnapshot {
   timestamp: number;
   systemStatus: 'IDLE' | 'RUNNING';
@@ -182,9 +246,9 @@ export interface TelemetrySnapshot {
   adaptiveReason: string;
 
   // Per-tier strategies
-  criticalStrategy?: ProcessingStrategy;
-  highStrategy?: ProcessingStrategy;
-  lowStrategy?: ProcessingStrategy;
+  criticalStrategy: ProcessingStrategy;
+  highStrategy: ProcessingStrategy;
+  lowStrategy: ProcessingStrategy;
 
   // Rates
   incomingRatePerSec: number;
@@ -199,18 +263,18 @@ export interface TelemetrySnapshot {
 
   highQueueSize: number;
   highQueueCapacity: number;
-  highQueuePressure?: number;
+  highQueuePressure: number;
 
   lowQueueSize: number;
   lowQueueCapacity: number;
   lowQueuePressure: number;
 
   // Adaptive Dynamics
-  currentBatchSize?: number;
-  batchSizeReason?: string;
-  workerLoadPercent?: number;
-  backlogGrowthRate?: number;
-  batchSizeHistory?: BatchSizeObservation[];
+  currentBatchSize: number;
+  batchSizeReason: string;
+  workerLoadPercent: number;
+  backlogGrowthRate: number;
+  batchSizeHistory: BatchSizeObservation[];
 
   // Latency (ms)
   criticalLatencyP50: number;
@@ -221,7 +285,7 @@ export interface TelemetrySnapshot {
   nonCriticalLatencyP95: number;
   nonCriticalLatencyAvg: number;
 
-  // Counters
+  // Counters & Event Accounting
   totalReceived: number;
   totalProcessed: number;
   criticalReceived: number;
@@ -235,24 +299,24 @@ export interface TelemetrySnapshot {
 
   lowReceived: number;
   lowProcessed: number;
-  lowAccepted?: number;
-  lowBatched?: number;
-  lowDeferredCycles?: number;
-  lowShed?: number;
+  lowAccepted: number;
+  lowBatched: number;
+  lowDeferredCycles: number;
+  lowShed: number;
 
   batchedCount: number;
   deferredCount: number;
   shedCount: number;
-  clickShedCount?: number;
-  logShedCount?: number;
-  lastShedEvent?: ShedLogEntry | null;
-  lastShedReason?: string;
+  clickShedCount: number;
+  logShedCount: number;
+  lastShedEvent: ShedLogEntry | null;
+  lastShedReason: string;
   safetyViolations: number;
 
   // Admission Backpressure
   backpressureActive: boolean;
 
-  // Grouped Telemetry
+  // Grouped Telemetry for Explainability
   queues?: {
     critical: QueueTelemetry;
     high: QueueTelemetry;
@@ -269,6 +333,7 @@ export interface TelemetrySnapshot {
   faultTolerance?: FaultToleranceTelemetry;
   workerScaling?: WorkerScalingTelemetry;
   duplicateDetection?: DuplicateDetectionTelemetry;
+  decisionFunction?: DecisionFunctionTelemetry;
 
   // Logs
   recentShedEvents: ShedLogEntry[];

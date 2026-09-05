@@ -7,6 +7,7 @@ import { EventSimulator } from '../simulator/eventSimulator.js';
 import { RetryController } from '../resilience/retryController.js';
 import { WorkerScaler } from '../workers/workerScaler.js';
 import { DuplicateDetector } from '../resilience/duplicateDetector.js';
+import { FormalizedDecisionEngine } from '../decision-engine/formalizedDecisionEngine.js';
 
 export class MetricsCollector {
   private queueManager: QueueManager;
@@ -16,6 +17,7 @@ export class MetricsCollector {
   private retryController?: RetryController;
   private workerScaler?: WorkerScaler;
   private duplicateDetector?: DuplicateDetector;
+  private decisionEngine?: FormalizedDecisionEngine;
   private simulator: EventSimulator | null = null;
 
   // Counters
@@ -84,6 +86,10 @@ export class MetricsCollector {
 
   public registerDuplicateDetector(detector: DuplicateDetector): void {
     this.duplicateDetector = detector;
+  }
+
+  public registerDecisionEngine(engine: FormalizedDecisionEngine): void {
+    this.decisionEngine = engine;
   }
 
   public registerSimulator(simulator: EventSimulator): void {
@@ -258,6 +264,12 @@ export class MetricsCollector {
       p95: Math.round(sorted[p95Idx]),
       avg: Math.round(sum / sorted.length),
     };
+  }
+
+  public getAverageNonCriticalLatency(): number {
+    if (this.nonCriticalLatencies.length === 0) return 15;
+    const sum = this.nonCriticalLatencies.reduce((acc, v) => acc + v, 0);
+    return Math.round(sum / this.nonCriticalLatencies.length);
   }
 
   public getSnapshot(): TelemetrySnapshot {
@@ -500,6 +512,9 @@ export class MetricsCollector {
             windowTtlSeconds: 60,
             recentDuplicates: [],
           },
+      decisionFunction: this.decisionEngine
+        ? this.decisionEngine.getTelemetry()
+        : undefined,
 
       recentShedEvents: this.sheddingPolicy.getRecentLogs(),
       recentActivityLogs: [...this.recentActivityLogs],
@@ -538,6 +553,9 @@ export class MetricsCollector {
     }
     if (this.duplicateDetector) {
       this.duplicateDetector.reset();
+    }
+    if (this.decisionEngine) {
+      this.decisionEngine.reset();
     }
   }
 }

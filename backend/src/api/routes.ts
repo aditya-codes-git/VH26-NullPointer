@@ -10,6 +10,7 @@ import { RetryController } from '../resilience/retryController.js';
 import { WorkerScaler } from '../workers/workerScaler.js';
 import { DuplicateDetector } from '../resilience/duplicateDetector.js';
 import { PriorityRouter } from '../router/priorityRouter.js';
+import { FormalizedDecisionEngine } from '../decision-engine/formalizedDecisionEngine.js';
 import { classifyEvent } from '../classifier/eventClassifier.js';
 import { EventType } from '../models/event.js';
 
@@ -21,7 +22,8 @@ export function createApiRouter(
   retryController?: RetryController,
   workerScaler?: WorkerScaler,
   duplicateDetector?: DuplicateDetector,
-  priorityRouter?: PriorityRouter
+  priorityRouter?: PriorityRouter,
+  decisionEngine?: FormalizedDecisionEngine
 ): Router {
   const router = Router();
 
@@ -326,6 +328,67 @@ export function createApiRouter(
       },
       telemetry: duplicateDetector.getTelemetry(),
     });
+  });
+
+  // ==========================================================
+  // Stretch Goal 4: Formalized Decision Function Demo Endpoints
+  // ==========================================================
+  router.get('/demo/decision', (_req, res) => {
+    if (!decisionEngine) {
+      return res.status(500).json({ error: 'FormalizedDecisionEngine not registered' });
+    }
+    res.json(decisionEngine.getTelemetry());
+  });
+
+  /**
+   * Evaluates the decision function against real live system state,
+   * or accepts specific override inputs for interactive evaluation.
+   */
+  router.post('/demo/decision', (req, res) => {
+    if (!decisionEngine) {
+      return res.status(500).json({ error: 'FormalizedDecisionEngine not registered' });
+    }
+
+    const hasOverrides =
+      req.body &&
+      (req.body.queuePressure !== undefined ||
+        req.body.workerUtilization !== undefined ||
+        req.body.latencyMs !== undefined ||
+        req.body.dataSizeBytes !== undefined ||
+        req.body.costPressure !== undefined);
+
+    let result;
+    if (hasOverrides) {
+      result = decisionEngine.evaluateWithInputs(req.body);
+    } else {
+      const priority = req.body?.priority || 'LOW';
+      result = decisionEngine.evaluateFromSystemState(priority);
+    }
+
+    broadcastTelemetryNow();
+
+    return res.json({
+      message: 'Decision evaluated successfully',
+      result,
+      telemetry: decisionEngine.getTelemetry(),
+    });
+  });
+
+  router.post('/demo/decision/weights', (req, res) => {
+    if (!decisionEngine) {
+      return res.status(500).json({ error: 'FormalizedDecisionEngine not registered' });
+    }
+
+    try {
+      decisionEngine.setWeights(req.body || {});
+      broadcastTelemetryNow();
+      return res.json({
+        message: 'Decision weights updated successfully',
+        weights: decisionEngine.getWeights(),
+      });
+    } catch (err: any) {
+      return res.status(400).json({ error: err.message });
+    }
   });
 
   return router;

@@ -199,6 +199,70 @@ export interface AdaptiveTelemetry {
   sheddingStatus: 'ENABLED' | 'DISABLED';
 }
 
+// ==========================================================
+// Stretch Goal 4: Formalized Decision Function Telemetry
+// ==========================================================
+export interface DecisionWeights {
+  queuePressure: number;
+  workerUtilization: number;
+  latency: number;
+  dataSize: number;
+  costPressure: number;
+  priority: number;
+}
+
+export interface DecisionInputs {
+  queuePressure: number;
+  workerUtilization: number;
+  latency: number;
+  latencyMs: number;
+  dataSize: number;
+  dataSizeBytes: number;
+  costPressure: number;
+  priority: number;
+  priorityName: EventPriority;
+}
+
+export interface DecisionContributions {
+  queuePressure: number;
+  workerUtilization: number;
+  latency: number;
+  dataSize: number;
+  costPressure: number;
+  priority: number;
+}
+
+export interface DecisionSnapshotEntry {
+  id: string;
+  timestamp: string;
+  timestampMs: number;
+  decision: ProcessingStrategy;
+  score: number;
+  queuePressurePercent: number;
+  workerUtilizationPercent: number;
+  latencyMs: number;
+  dataSizeBytes: number;
+  costPressurePercent: number;
+  priority: EventPriority;
+  topReasons: string[];
+  explanation: string;
+  confidence: number;
+}
+
+export interface DecisionFunctionTelemetry {
+  currentDecision: ProcessingStrategy;
+  currentScore: number;
+  confidence: number;
+  weights: DecisionWeights;
+  currentInputs: DecisionInputs;
+  currentContributions: DecisionContributions;
+  currentReasons: string[];
+  explanation: string;
+  lastUpdated: string;
+  lastUpdatedMs: number;
+  decisionHistory: DecisionSnapshotEntry[];
+}
+
 export interface TelemetrySnapshot {
   timestamp: number;
   systemStatus: 'IDLE' | 'RUNNING';
@@ -295,6 +359,7 @@ export interface TelemetrySnapshot {
   faultTolerance: FaultToleranceTelemetry;
   workerScaling: WorkerScalingTelemetry;
   duplicateDetection: DuplicateDetectionTelemetry;
+  decisionFunction?: DecisionFunctionTelemetry;
 
   // Logs
   recentShedEvents: ShedLogEntry[];

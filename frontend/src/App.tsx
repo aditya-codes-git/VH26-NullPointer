@@ -22,6 +22,7 @@ import { TelemetrySnapshot } from './types/telemetry.js';
 import { FaultToleranceSection } from './components/FaultToleranceSection.js';
 import { DynamicWorkerScalingSection } from './components/DynamicWorkerScalingSection.js';
 import { DuplicateProtectionSection } from './components/DuplicateProtectionSection.js';
+import { DecisionEngineSection } from './components/DecisionEngineSection.js';
 
 export const App: React.FC = () => {
   // Connection and live telemetry states
@@ -305,6 +306,13 @@ export const App: React.FC = () => {
           >
             <span className="material-symbols-outlined text-[20px] text-amber-500">content_copy</span>
             <span className="font-semibold text-slate-800">Duplicate Shield</span>
+          </a>
+          <a
+            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
+            href="#decision-engine"
+          >
+            <span className="material-symbols-outlined text-[20px] text-purple-500">psychology</span>
+            <span className="font-semibold text-slate-800">Decision Engine</span>
           </a>
           <a
             className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
@@ -1159,6 +1167,14 @@ export const App: React.FC = () => {
           <div id="duplicate-detection">
             <DuplicateProtectionSection
               duplicateDetection={telemetry?.duplicateDetection}
+              disabled={isPending}
+            />
+          </div>
+
+          {/* Section: Formalized Decision Engine (Stretch Goal 4) */}
+          <div id="decision-engine">
+            <DecisionEngineSection
+              decisionFunction={telemetry?.decisionFunction}
               disabled={isPending}
             />
           </div>

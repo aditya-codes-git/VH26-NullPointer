@@ -124,3 +124,31 @@ export async function triggerTestDuplicate(
   return res.json();
 }
 
+export async function triggerEvaluateDecision(params?: {
+  priority?: string;
+  queuePressure?: number;
+  workerUtilization?: number;
+  latencyMs?: number;
+  dataSizeBytes?: number;
+  costPressure?: number;
+}): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/demo/decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params || {}),
+  });
+  if (!res.ok) throw new Error(`Failed to evaluate decision: ${res.statusText}`);
+  return res.json();
+}
+
+export async function triggerUpdateDecisionWeights(weights: Record<string, number>): Promise<any> {
+  const res = await fetch(`${API_BASE_URL}/api/demo/decision/weights`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(weights),
+  });
+  if (!res.ok) throw new Error(`Failed to update decision weights: ${res.statusText}`);
+  return res.json();
+}
+
+
