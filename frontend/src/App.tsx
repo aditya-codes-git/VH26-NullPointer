@@ -24,8 +24,23 @@ import { DynamicWorkerScalingSection } from './components/DynamicWorkerScalingSe
 import { DuplicateProtectionSection } from './components/DuplicateProtectionSection.js';
 import { DecisionEngineSection } from './components/DecisionEngineSection.js';
 import { WorkloadProfileSection } from './components/WorkloadProfileSection.js';
+import { supabase, getCurrentUser } from './services/supabaseClient.js';
+import { User } from '@supabase/supabase-js';
+import { AuthModal } from './components/AuthModal.js';
+import {
+  EventHistoryView,
+  RunHistoryView,
+  HistoricalAnalyticsView,
+  AccountView,
+} from './components/HistoricalViews.js';
 
 export const App: React.FC = () => {
+  // Navigation & Supabase Authentication states
+  const [activeTab, setActiveTab] = useState<'live' | 'event-history' | 'run-history' | 'analytics' | 'account'>('live');
+  const [user, setUser] = useState<User | null>(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+
   // Connection and live telemetry states
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot | null>(null);
@@ -70,6 +85,27 @@ export const App: React.FC = () => {
 
     return cleanup;
   }, []);
+
+  // Supabase Auth State Listener
+  useEffect(() => {
+    if (supabase) {
+      getCurrentUser().then((u) => setUser(u));
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setUser(session?.user || null);
+      });
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
+  }, []);
+
+  const handleSignOut = async () => {
+    if (supabase) {
+      await supabase.auth.signOut();
+      setUser(null);
+      setActiveTab('live');
+    }
+  };
 
   // Simulation API Trigger Handlers
   const handleApplyRate = async (rateToApply?: number) => {
@@ -269,66 +305,168 @@ export const App: React.FC = () => {
       {/* Side Navigation */}
       {/* -------------------------------------------------- */}
       <aside className="hidden md:flex flex-col h-screen w-[260px] bg-[#ffffff] border-r border-[#e2e8f0] sticky top-0 p-4 gap-2 shrink-0 select-none">
-        <div className="flex items-center gap-3 mb-6 px-2">
-          <div className="h-8 w-8 rounded-lg bg-[#2563eb] flex items-center justify-center text-white font-bold text-sm shadow-xs">
-            AO
+        <div className="flex items-center gap-3 mb-4 px-2">
+          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center text-white font-bold text-base shadow-sm">
+            AF
           </div>
           <div>
-            <h2 className="text-sm font-bold text-[#131b2e] leading-tight">System Admin</h2>
-            <p className="text-[11px] text-[#64748b]">Adaptive Ops</p>
+            <h2 className="text-sm font-bold text-[#131b2e] leading-tight">AdaptiFlow</h2>
+            <p className="text-[11px] text-[#64748b]">Adaptive Event Pipeline</p>
           </div>
         </div>
 
-        <nav className="flex-1 flex flex-col gap-1">
-          <a
-            className="flex items-center gap-3 px-3 py-2 bg-[#eaedff] text-[#004ac6] rounded-lg font-semibold text-xs transition-colors shadow-2xs"
-            href="#dashboard"
+        {/* User Account Capsule */}
+        <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-xs mb-2">
+          {user ? (
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] uppercase font-bold text-emerald-600">Authenticated</span>
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+              </div>
+              <div className="font-semibold text-slate-800 truncate text-[11px]" title={user.email}>
+                {user.email}
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-500 font-medium">Local Mode</span>
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="text-[11px] text-blue-600 hover:text-blue-800 font-bold"
+              >
+                Sign In
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Primary View Switcher */}
+        <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 px-2 mt-1 mb-1">
+          Views
+        </div>
+        <nav className="flex flex-col gap-1 mb-4">
+          <button
+            onClick={() => setActiveTab('live')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
+              activeTab === 'live'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
           >
             <span className="material-symbols-outlined text-[20px]">dashboard</span>
-            <span>Dashboard</span>
-          </a>
-          <a
-            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
-            href="#fault-tolerance"
+            <span>Live Pipeline</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('event-history')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
+              activeTab === 'event-history'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
           >
-            <span className="material-symbols-outlined text-[20px] text-rose-500">health_and_safety</span>
-            <span className="font-semibold text-slate-800">Fault Tolerance</span>
-          </a>
-          <a
-            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
-            href="#dynamic-worker-scaling"
+            <span className="material-symbols-outlined text-[20px]">receipt_long</span>
+            <span>Event History</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('run-history')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
+              activeTab === 'run-history'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
           >
-            <span className="material-symbols-outlined text-[20px] text-indigo-500">hub</span>
-            <span className="font-semibold text-slate-800">Worker Scaling</span>
-          </a>
-          <a
-            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
-            href="#duplicate-detection"
+            <span className="material-symbols-outlined text-[20px]">history</span>
+            <span>Run History</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('analytics')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
+              activeTab === 'analytics'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
           >
-            <span className="material-symbols-outlined text-[20px] text-amber-500">content_copy</span>
-            <span className="font-semibold text-slate-800">Duplicate Shield</span>
-          </a>
-          <a
-            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
-            href="#decision-engine"
+            <span className="material-symbols-outlined text-[20px]">insights</span>
+            <span>Analytics</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('account')}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg font-semibold text-xs transition-colors text-left ${
+              activeTab === 'account'
+                ? 'bg-[#eaedff] text-[#004ac6] shadow-2xs'
+                : 'text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e]'
+            }`}
           >
-            <span className="material-symbols-outlined text-[20px] text-purple-500">psychology</span>
-            <span className="font-semibold text-slate-800">Decision Engine</span>
-          </a>
+            <span className="material-symbols-outlined text-[20px]">account_circle</span>
+            <span>Account</span>
+          </button>
         </nav>
+
+        {/* In-Page Quick Links for Live Pipeline */}
+        {activeTab === 'live' && (
+          <>
+            <div className="text-[10px] uppercase tracking-wider font-bold text-slate-400 px-2 mt-2 mb-1">
+              Live Modules
+            </div>
+            <nav className="flex flex-col gap-0.5">
+              <a
+                className="flex items-center gap-2.5 px-3 py-1.5 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-[11px] transition-colors"
+                href="#fault-tolerance"
+              >
+                <span className="material-symbols-outlined text-[16px] text-rose-500">health_and_safety</span>
+                <span>Fault Tolerance</span>
+              </a>
+              <a
+                className="flex items-center gap-2.5 px-3 py-1.5 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-[11px] transition-colors"
+                href="#dynamic-worker-scaling"
+              >
+                <span className="material-symbols-outlined text-[16px] text-indigo-500">hub</span>
+                <span>Worker Scaling</span>
+              </a>
+              <a
+                className="flex items-center gap-2.5 px-3 py-1.5 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-[11px] transition-colors"
+                href="#duplicate-detection"
+              >
+                <span className="material-symbols-outlined text-[16px] text-amber-500">content_copy</span>
+                <span>Duplicate Shield</span>
+              </a>
+              <a
+                className="flex items-center gap-2.5 px-3 py-1.5 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-[11px] transition-colors"
+                href="#decision-engine"
+              >
+                <span className="material-symbols-outlined text-[16px] text-purple-500">psychology</span>
+                <span>Decision Engine</span>
+              </a>
+            </nav>
+          </>
+        )}
 
         <div className="mt-auto flex flex-col gap-1 border-t border-[#e2e8f0] pt-3">
           <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-200 text-[11px] font-mono mb-1">
-            <div className="text-slate-500">Pipeline Version</div>
-            <div className="font-bold text-slate-800">v2.4-adaptive</div>
+            <div className="text-slate-500">Pipeline Engine</div>
+            <div className="font-bold text-slate-800">v2.5-supabase</div>
           </div>
-          <a
-            className="flex items-center gap-3 px-3 py-2 text-[#64748b] hover:bg-[#f8fafc] hover:text-[#131b2e] rounded-lg text-xs transition-colors"
-            href="#"
-          >
-            <span className="material-symbols-outlined text-[18px]">description</span>
-            <span>Documentation</span>
-          </a>
+          {user ? (
+            <button
+              onClick={handleSignOut}
+              className="flex items-center gap-2 px-3 py-1.5 text-rose-600 hover:bg-rose-50 rounded-lg text-xs font-semibold transition-colors"
+            >
+              <span className="material-symbols-outlined text-[16px]">logout</span>
+              <span>Sign Out</span>
+            </button>
+          ) : (
+            <button
+              onClick={() => setIsAuthModalOpen(true)}
+              className="flex items-center gap-2 px-3 py-1.5 text-blue-600 hover:bg-blue-50 rounded-lg text-xs font-semibold transition-colors"
+            >
+              <span className="material-symbols-outlined text-[16px]">login</span>
+              <span>Sign In</span>
+            </button>
+          )}
         </div>
       </aside>
 
@@ -339,7 +477,7 @@ export const App: React.FC = () => {
         {/* Top App Bar */}
         <header className="flex justify-between items-center px-8 py-3 w-full sticky top-0 z-40 bg-white border-b border-[#e2e8f0] shadow-2xs">
           <div className="flex items-center gap-3">
-            <h1 className="text-lg font-bold text-[#004ac6] tracking-tight">Adaptive Event-Processing Pipeline</h1>
+            <h1 className="text-lg font-bold text-[#004ac6] tracking-tight">AdaptiFlow Event Pipeline</h1>
           </div>
           <div className="flex items-center gap-3">
             <div className="text-xs font-mono text-slate-500 hidden sm:block">
@@ -356,11 +494,60 @@ export const App: React.FC = () => {
                 OFFLINE
               </span>
             )}
+            {user ? (
+              <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
+                <span className="text-xs font-mono text-slate-700 font-semibold hidden md:inline">
+                  User: <strong className="text-blue-700">{user.email}</strong>
+                </span>
+                <button
+                  onClick={handleSignOut}
+                  className="text-xs text-rose-600 hover:text-rose-800 font-semibold px-2 py-1 hover:bg-rose-50 rounded transition-colors"
+                >
+                  Logout
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setIsAuthModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-xs transition-colors"
+              >
+                <span className="material-symbols-outlined text-sm">login</span>
+                <span>Sign In</span>
+              </button>
+            )}
           </div>
         </header>
 
         {/* Main Canvas */}
         <main className="flex-1 p-6 md:p-8 flex flex-col gap-6 max-w-7xl w-full mx-auto">
+          {activeTab === 'event-history' && (
+            <EventHistoryView user={user} selectedRunId={selectedRunId} />
+          )}
+
+          {activeTab === 'run-history' && (
+            <RunHistoryView
+              user={user}
+              onSelectRun={(runId) => {
+                setSelectedRunId(runId);
+                setActiveTab('event-history');
+              }}
+            />
+          )}
+
+          {activeTab === 'analytics' && (
+            <HistoricalAnalyticsView user={user} />
+          )}
+
+          {activeTab === 'account' && (
+            <AccountView
+              user={user}
+              onSignOut={handleSignOut}
+              onOpenSignIn={() => setIsAuthModalOpen(true)}
+            />
+          )}
+
+          {activeTab === 'live' && (
+            <>
           {/* Alerts */}
           {!isConnected && (
             <div className="bg-amber-50 border border-amber-200 text-amber-800 px-4 py-3 rounded-lg text-xs flex items-center justify-between shadow-xs">
@@ -1307,8 +1494,19 @@ export const App: React.FC = () => {
               </table>
             </div>
           </section>
+            </>
+          )}
         </main>
       </div>
+
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={() => {
+          setIsAuthModalOpen(false);
+          setActiveTab('live');
+        }}
+      />
     </div>
   );
 };

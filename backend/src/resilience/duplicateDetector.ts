@@ -25,6 +25,7 @@ export class DuplicateDetector {
   // Bounded ring buffer for recent duplicate log entries (max 50)
   private recentDuplicates: DuplicateLogEntry[] = [];
   private readonly maxRecentLogs = 50;
+  public onDuplicate?: (entry: DuplicateLogEntry) => void;
 
   constructor(ttlSeconds = 60, maxCapacity = 10000) {
     this.ttlMs = ttlSeconds * 1000;
@@ -71,6 +72,10 @@ export class DuplicateDetector {
         this.recentDuplicates.unshift(logEntry);
         if (this.recentDuplicates.length > this.maxRecentLogs) {
           this.recentDuplicates.pop();
+        }
+
+        if (this.onDuplicate) {
+          this.onDuplicate(logEntry);
         }
 
         return {

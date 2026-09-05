@@ -18,6 +18,14 @@ import {
   WorkloadScenario,
   isValidWorkloadScenario,
 } from '../config/workloadConfig.js';
+import { HistoryPersister } from '../persistence/historyPersister.js';
+import {
+  requireAuthMiddleware,
+  optionalAuthMiddleware,
+  createScopedClient,
+  getSupabaseClient,
+  isSupabaseConfigured,
+} from '../supabase/supabaseClient.js';
 
 export function createApiRouter(
   simulator: EventSimulator,
@@ -28,9 +36,11 @@ export function createApiRouter(
   workerScaler?: WorkerScaler,
   duplicateDetector?: DuplicateDetector,
   priorityRouter?: PriorityRouter,
-  decisionEngine?: FormalizedDecisionEngine
+  decisionEngine?: FormalizedDecisionEngine,
+  historyPersister?: HistoryPersister
 ): Router {
   const router = Router();
+  router.use(optionalAuthMiddleware);
 
   router.get('/health', (_req, res) => {
     const kafkaStatus = getKafkaStatus();
@@ -456,6 +466,236 @@ export function createApiRouter(
     } catch (err: any) {
       return res.status(400).json({ error: err.message });
     }
+  });
+
+  // ==========================================================
+  // Supabase Persistence & Run Lifecycle Management
+  // ==========================================================
+
+  router.get('/persistence/status', (_req, res) => {
+    if (!historyPersister) {
+      return res.json({
+        isConfigured: false,
+        dbStatus: 'OFFLINE',
+        message: 'History persister not initialized',
+      });
+    }
+    res.json(historyPersister.getTelemetry());
+  });
+
+  router.post('/runs/start', requireAuthMiddleware, async (req, res) => {
+    if (!historyPersister) {
+      return res.status(503).json({ error: 'History persistence service is not initialized' });
+    }
+
+    const userId = req.user!.id;
+    const userToken = req.token!;
+    const scenario: WorkloadScenario = req.body?.scenario || simulator.getScenario();
+
+    if (!isValidWorkloadScenario(scenario)) {
+      return res.status(400).json({ error: `Invalid scenario: ${scenario}` });
+    }
+
+    if (simulator.isRunning()) {
+      return res.status(409).json({ error: 'A simulation run is already active. Stop traffic first.' });
+    }
+
+    simulator.setScenario(scenario);
+    metricsCollector.resetRunCounters();
+
+    const config = WORKLOAD_CONFIGS[scenario];
+    const runId = await historyPersister.startRun(userId, userToken, scenario, config);
+
+    if (!runId) {
+      return res.status(500).json({ error: 'Failed to create run record in Supabase.' });
+    }
+
+    // Optionally start traffic immediately
+    if (req.body?.startSimulator) {
+      const mode = req.body?.mode || 'NORMAL';
+      if (mode === 'SPIKE') {
+        simulator.triggerSpike();
+      } else {
+        simulator.startNormal();
+      }
+    }
+
+    broadcastTelemetryNow();
+
+    res.status(201).json({
+      message: `Workload run started successfully`,
+      runId,
+      userId,
+      scenario,
+      simulatorRunning: simulator.isRunning(),
+    });
+  });
+
+  router.post('/runs/stop', requireAuthMiddleware, async (_req, res) => {
+    if (!historyPersister) {
+      return res.status(503).json({ error: 'History persistence service is not initialized' });
+    }
+
+    const activeRun = historyPersister.getActiveRun();
+    if (!activeRun) {
+      return res.status(400).json({ error: 'No active workload run to stop.' });
+    }
+
+    // 1. Stop traffic
+    if (simulator.isRunning()) {
+      simulator.stop();
+    }
+
+    // 2. Compute final metrics snapshot
+    const snap = metricsCollector.getSnapshot();
+    const runDist = metricsCollector.getRunDistribution();
+
+    await historyPersister.stopRun({
+      actualDistribution: runDist.actual,
+      totalEvents: runDist.runCounts.totalRunReceived,
+      processed: snap.totalProcessed,
+      queued: snap.criticalQueueSize + snap.highQueueSize + snap.lowQueueSize,
+      shed: snap.shedCount ?? (snap.clickShedCount + snap.logShedCount),
+      retries: snap.faultTolerance?.retryAttempts || 0,
+      duplicates: snap.duplicateDetection?.duplicatesDetected || 0,
+      peakPressure: Math.max(snap.criticalQueuePressure, snap.highQueuePressure, snap.lowQueuePressure),
+      maximumWorkers: snap.workerScaling?.maxWorkers || 2,
+      avgLatency: snap.criticalLatencyAvg || 0,
+    });
+
+    broadcastTelemetryNow();
+
+    res.json({
+      message: 'Workload run stopped and finalized in Supabase',
+      runId: activeRun.runId,
+      status: 'COMPLETED',
+    });
+  });
+
+  router.get('/history/runs', requireAuthMiddleware, async (req, res) => {
+    const client = req.supabaseScoped || getSupabaseClient();
+    if (!client) {
+      return res.status(503).json({ error: 'Supabase database is not configured' });
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 20, 100);
+    const offset = Number(req.query.offset) || 0;
+
+    const { data, error, count } = await client
+      .from('workload_runs')
+      .select('*', { count: 'exact' })
+      .order('start_time', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json({
+      runs: data || [],
+      total: count || 0,
+      limit,
+      offset,
+    });
+  });
+
+  router.get('/history/events', requireAuthMiddleware, async (req, res) => {
+    const client = req.supabaseScoped || getSupabaseClient();
+    if (!client) {
+      return res.status(503).json({ error: 'Supabase database is not configured' });
+    }
+
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const offset = Number(req.query.offset) || 0;
+    const { runId, type, priority, strategy, status, search } = req.query;
+
+    let query = client
+      .from('event_logs')
+      .select('*', { count: 'exact' })
+      .order('timestamp', { ascending: false });
+
+    if (runId && typeof runId === 'string') query = query.eq('run_id', runId);
+    if (type && typeof type === 'string') query = query.eq('event_type', type);
+    if (priority && typeof priority === 'string') query = query.eq('priority', priority);
+    if (strategy && typeof strategy === 'string') query = query.eq('strategy', strategy);
+    if (status && typeof status === 'string') query = query.eq('status', status);
+    if (search && typeof search === 'string') query = query.ilike('event_id', `%${search}%`);
+
+    const { data, error, count } = await query.range(offset, offset + limit - 1);
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    res.json({
+      events: data || [],
+      total: count || 0,
+      limit,
+      offset,
+    });
+  });
+
+  router.get('/history/analytics', requireAuthMiddleware, async (req, res) => {
+    const client = req.supabaseScoped || getSupabaseClient();
+    if (!client) {
+      return res.status(503).json({ error: 'Supabase database is not configured' });
+    }
+
+    const { data: runs, error } = await client
+      .from('workload_runs')
+      .select('*')
+      .order('start_time', { ascending: false })
+      .limit(50);
+
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+
+    const totalRuns = runs?.length || 0;
+    let totalEvents = 0;
+    let totalProcessed = 0;
+    let totalShed = 0;
+    let totalRetries = 0;
+    let totalDuplicates = 0;
+    let peakPressureOverall = 0;
+    let maxWorkersOverall = 2;
+    let latencySum = 0;
+
+    const scenarioCounts: Record<string, number> = {
+      CRITICAL_HEAVY: 0,
+      HIGH_HEAVY: 0,
+      LOW_HEAVY: 0,
+    };
+
+    for (const r of runs || []) {
+      totalEvents += r.total_events || 0;
+      totalProcessed += r.processed || 0;
+      totalShed += r.shed || 0;
+      totalRetries += r.retries || 0;
+      totalDuplicates += r.duplicates || 0;
+      if ((r.peak_pressure || 0) > peakPressureOverall) peakPressureOverall = r.peak_pressure;
+      if ((r.maximum_workers || 0) > maxWorkersOverall) maxWorkersOverall = r.maximum_workers;
+      latencySum += r.avg_latency || 0;
+      if (r.scenario && scenarioCounts[r.scenario] !== undefined) {
+        scenarioCounts[r.scenario]++;
+      }
+    }
+
+    res.json({
+      summary: {
+        totalRuns,
+        totalEvents,
+        totalProcessed,
+        totalShed,
+        totalRetries,
+        totalDuplicates,
+        overallPeakPressure: Number(peakPressureOverall.toFixed(3)),
+        overallMaxWorkers: maxWorkersOverall,
+        overallAvgLatency: totalRuns > 0 ? Number((latencySum / totalRuns).toFixed(2)) : 0,
+      },
+      scenarioBreakdown: scenarioCounts,
+      recentRuns: runs?.slice(0, 10) || [],
+    });
   });
 
   return router;

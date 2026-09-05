@@ -58,6 +58,7 @@ export class FormalizedDecisionEngine {
   private readonly maxHistoryLength = 50;
 
   private lastResult: DecisionResult | null = null;
+  public onDecision?: (entry: DecisionSnapshotEntry) => void;
 
   constructor(
     config: PipelineConfig,
@@ -350,6 +351,10 @@ export class FormalizedDecisionEngine {
     this.decisionHistory.unshift(historyEntry);
     if (this.decisionHistory.length > this.maxHistoryLength) {
       this.decisionHistory.pop();
+    }
+
+    if (this.onDecision) {
+      this.onDecision(historyEntry);
     }
   }
 

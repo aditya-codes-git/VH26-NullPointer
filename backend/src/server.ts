@@ -21,6 +21,7 @@ import { ensureTopicExists, KAFKA_CONFIG } from './kafka/kafkaClient.js';
 import { WorkerScaler } from './workers/workerScaler.js';
 import { DuplicateDetector } from './resilience/duplicateDetector.js';
 import { FormalizedDecisionEngine } from './decision-engine/formalizedDecisionEngine.js';
+import { HistoryPersister } from './persistence/historyPersister.js';
 
 const app = express();
 app.use(cors());
@@ -60,6 +61,8 @@ const workerPool = new WorkerPool(
 );
 workerPool.registerMetricsCollector(metricsCollector);
 
+const historyPersister = new HistoryPersister();
+
 // Dynamic Worker Scaler
 const workerScaler = new WorkerScaler(
   config,
@@ -70,6 +73,7 @@ const workerScaler = new WorkerScaler(
     broadcastTelemetryNow();
   }
 );
+workerScaler.onScalingAction = (action) => historyPersister.recordScaling(action);
 metricsCollector.registerWorkerScaler(workerScaler);
 
 // Formalized Decision Engine
@@ -81,15 +85,25 @@ const formalizedDecisionEngine = new FormalizedDecisionEngine(
   workerScaler,
   metricsCollector
 );
+formalizedDecisionEngine.onDecision = (entry) => historyPersister.recordDecision(entry);
 metricsCollector.registerDecisionEngine(formalizedDecisionEngine);
 
-// Wire worker completion to metrics
+// Register persistence callbacks
+retryController.onAuditLog = (entry) => historyPersister.recordRetry(entry);
+duplicateDetector.onDuplicate = (entry) => historyPersister.recordDuplicate(entry);
+
+// Wire worker completion to metrics and persistent history
 workerPool.setListeners(
   ({ event, latencyMs }) => {
     metricsCollector.recordProcessedEvent(event, latencyMs);
+    historyPersister.recordEvent(event, latencyMs);
   },
   (events, durationMs) => {
     metricsCollector.recordBatchProcessed(events, durationMs);
+    const avgLatency = durationMs / (events.length || 1);
+    for (const e of events) {
+      historyPersister.recordEvent(e, avgLatency);
+    }
   }
 );
 
@@ -115,7 +129,7 @@ backpressureController.registerSimulator(simulator);
 workerPool.start();
 workerScaler.start();
 
-// Mount API routes (including POST /api/ingest)
+// Mount API routes (including POST /api/ingest and Supabase historical routes)
 app.use(
   '/api',
   createApiRouter(
@@ -127,7 +141,8 @@ app.use(
     workerScaler,
     duplicateDetector,
     priorityRouter,
-    formalizedDecisionEngine
+    formalizedDecisionEngine,
+    historyPersister
   )
 );
 

@@ -9,9 +9,10 @@ export class WorkerScaler {
   private workerPool: WorkerPool;
   private queueManager: QueueManager;
   private metricsCollector: MetricsCollector;
+  private isRunning = false;
+  public onScalingAction?: (action: WorkerScalingAction) => void;
   private onScaleCallback?: () => void;
 
-  private isRunning = false;
   private evaluationInterval: NodeJS.Timeout | null = null;
 
   // Cooldown timers
@@ -237,6 +238,10 @@ export class WorkerScaler {
     // Trigger immediate Socket.IO telemetry broadcast
     if (this.onScaleCallback) {
       this.onScaleCallback();
+    }
+
+    if (this.onScalingAction) {
+      this.onScalingAction(action);
     }
   }
 

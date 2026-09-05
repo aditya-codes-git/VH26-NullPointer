@@ -221,50 +221,91 @@ The dashboard provides real-time visibility into pipeline behavior.
 | Layer | Technology | Purpose |
 |---|---|---|
 | **Language & Runtime** | TypeScript / Node.js | Asynchronous event processing and type safety. |
-| **Backend Framework** | Express.js | HTTP REST endpoints for metrics polling/control. |
-| **Real-time Transport** | Socket.IO / WebSockets | Streaming live telemetry to the dashboard. |
-| **Data Structures** | In-memory queues / Arrays | Low-latency queue management without external brokers. |
-| **Frontend Framework** | React + Vite | Web dashboard for real-time visualization. |
-| **Visualization** | Recharts | Rendering live latency, queue depth, and throughput charts. |
+| **Backend Framework** | Express.js | HTTP REST endpoints for metrics polling/control, history, and run management. |
+| **Real-time Transport** | Socket.IO / WebSockets | Streaming live telemetry to the dashboard at 500ms intervals. |
+| **Data Structures** | In-memory queues / Arrays | Ultra-low-latency bounded queue management without blocking message brokers. |
+| **Persistence & Auth** | Supabase (PostgreSQL + GoTrue) | Multi-tenant user authentication, RLS data isolation, and persistent historical run analytics. |
+| **Persistence Buffer** | Non-blocking Ring Buffer | In-memory batch persister flushing to PostgreSQL with zero hot-path overhead. |
+| **Frontend Framework** | React + Vite + TypeScript | Modern web dashboard with tabbed views (Live Pipeline, Event History, Run History, Analytics, Account). |
+| **Visualization** | Recharts + Lucide Icons | Rendering live latency, queue depth, throughput charts, and historical aggregates. |
 
 ---
 
 ## 14. Project Structure
 
-*(Proposed blueprint - to be updated upon final codebase assembly)*
-
 ```text
 VH26-NullPointer/
 ├── backend/
 │   ├── src/
-│   │   ├── simulator/        # Synthetic event generator
-│   │   ├── classifier/       # Priority classifier logic
-│   │   ├── router/           # Priority router
-│   │   ├── queues/           # In-memory queue managers
-│   │   ├── decision-engine/  # Adaptive logic & backpressure controller
-│   │   ├── workers/          # Stream & batch processing workers
-│   │   ├── metrics/          # Telemetry collector
-│   │   └── server.ts         # Express & WebSockets backend server
+│   │   ├── api/              # Express REST routes & authentication middleware
+│   │   ├── backpressure/     # Queue pressure monitor & shedding policy
+│   │   ├── classifier/       # Deterministic event classifier
+│   │   ├── config/           # Pipeline thresholds & workload distribution specs
+│   │   ├── decision-engine/  # Adaptive engine & 6-input formal decision engine
+│   │   ├── metrics/          # Rolling-rate telemetry & event accounting collector
+│   │   ├── persistence/      # Non-blocking async ring buffer history persister
+│   │   ├── queues/           # Bounded FIFO queues & priority queue manager
+│   │   ├── resilience/       # TTL duplicate detector & exponential backoff retry controller
+│   │   ├── router/           # Priority router with backpressure pause
+│   │   ├── simulator/        # In-memory traffic generator with scenario sampling
+│   │   ├── supabase/         # Supabase client factory & JWT verification service
+│   │   ├── workers/          # Dynamic worker pool & auto-scaler (2-8 workers)
+│   │   └── server.ts         # Express & Socket.IO backend application bootstrap
+│   ├── supabase/
+│   │   └── migrations/       # PostgreSQL DDL with RLS policies & performance indexes
+│   ├── tests/                # Automated Vitest test suite (16 test files)
 │   └── package.json
 ├── frontend/
 │   ├── src/
-│   │   ├── components/       # UI widgets & status indicators
-│   │   ├── dashboard/        # Main observability view
-│   │   └── services/         # Socket connection client
+│   │   ├── components/       # Dashboard widgets, AuthModal, and HistoricalViews
+│   │   ├── services/         # Socket.IO client & Supabase auth/data client
+│   │   ├── App.tsx           # Application shell with tabbed navigation & session sync
+│   │   └── main.tsx          # React application entry point
 │   └── package.json
-├── docs/
-│   └── screenshots/          # Placeholder for visual evidence
-├── PRD-Adaptive-Event-Pipeline.md
+├── traffic-generator/        # External multi-threaded Python traffic injection script
+├── TECHNICAL_CODE_REFERENCE.md # Hackathon technical architecture & study reference
+├── .env.example              # Environment variables template
 └── README.md
 ```
 
 ---
 
-## 15. Installation
+## 15. Supabase Authentication & Persistent Storage Architecture
+
+AdaptiFlow implements a **dual-tier processing and persistence architecture** that cleanly separates high-throughput in-memory execution from durable PostgreSQL analytics:
+
+```
+[ Ingested Events ] ──► [ In-Memory Hot Path: 0ms DB I/O ] ──► [ Sub-10ms Workers ]
+                                   │
+                     (Non-blocking background push)
+                                   ▼
+             [ Ring Buffer History Persister (Max 5,000) ]
+                                   │
+                      (Batched async flush @ 1Hz)
+                                   ▼
+              [ Supabase Managed PostgreSQL + RLS ]
+                     ├── workload_runs
+                     ├── event_logs
+                     ├── retry_logs
+                     ├── duplicate_logs
+                     ├── scaling_events
+                     └── decision_logs
+```
+
+### Key Architectural Guarantees:
+1. **Zero Hot-Path Database Latency:** Event ingestion, queue routing, and worker execution never await PostgreSQL queries. Data persistence operates completely asynchronously via `HistoryPersister`.
+2. **Multi-Tenant Row Level Security (RLS):** Every table enforces PostgreSQL RLS policies where `auth.uid() = user_id`. Users can only inspect their own runs, event audits, and telemetry history.
+3. **Graceful Degraded Persistence:** If database connectivity experiences network delay or outage, the in-memory buffer caps at 5,000 records, dropping oldest items without failing the real-time event pipeline.
+4. **Session-Synced Frontend:** The React UI supports instant Google OAuth Sign-In, Email/Password authentication, and Logout with automatic session renewal, toggling between anonymous pipeline simulation and authenticated multi-run historical analytics.
+
+---
+
+## 16. Installation & Configuration
 
 ### Prerequisites
 * **Node.js**: `v18.x` or higher
 * **npm**: `v9.x` or higher
+* **Supabase Project**: Free tier PostgreSQL database with Auth enabled
 
 ### Step-by-Step Setup
 
@@ -274,19 +315,30 @@ VH26-NullPointer/
    cd VH26-NullPointer
    ```
 
-2. **Install Backend Dependencies:**
+2. **Configure Environment Variables:**
+   Copy `.env.example` into both `backend/.env` and `frontend/.env`:
    ```bash
-   cd backend
-   npm install
+   cp .env.example backend/.env
+   cp .env.example frontend/.env
+   ```
+   Fill in your Supabase project URL and anon public key:
+   ```env
+   SUPABASE_URL=https://<your-project-ref>.supabase.co
+   SUPABASE_ANON_KEY=<your-supabase-anon-key>
+   VITE_SUPABASE_URL=https://<your-project-ref>.supabase.co
+   VITE_SUPABASE_ANON_KEY=<your-supabase-anon-key>
    ```
 
-3. **Install Frontend Dependencies:**
+3. **Deploy Database Schema:**
+   Execute the migration SQL script `backend/supabase/migrations/20260905000000_initial_schema.sql` in the Supabase SQL Editor.
+
+4. **Install Backend & Frontend Dependencies:**
    ```bash
-   cd ../frontend
-   npm install
+   cd backend && npm install
+   cd ../frontend && npm install
    ```
 
-4. **Run the Application:**
+5. **Run the Application:**
    * Start Backend Server:
      ```bash
      cd backend
@@ -298,12 +350,12 @@ VH26-NullPointer/
      npm run dev
      ```
 
-5. **Open Dashboard:**  
-   Navigate to `http://localhost:5173` in your web browser.
+6. **Open Dashboard:**  
+   Navigate to `http://localhost:5173` in your web browser. You can simulate traffic anonymously or sign in to persist named workload runs and review historical telemetry.
 
 ---
 
-## 16. Running the Demo
+## 17. Running the Demo
 
 Follow this evaluation flow during judging:
 
@@ -328,7 +380,7 @@ Follow this evaluation flow during judging:
 
 ---
 
-## 17. Benchmark
+## 18. Benchmark
 
 ### Naive Pipeline vs. AdaptiFlow (Placeholder Metrics)
 
@@ -344,7 +396,7 @@ Follow this evaluation flow during judging:
 
 ---
 
-## 18. Performance Metrics
+## 19. Performance Metrics
 
 To properly evaluate system health under load, latency metrics are measured independently by priority tier:
 
@@ -357,7 +409,7 @@ Reporting latency as an aggregate average would hide critical transaction degrad
 
 ---
 
-## 19. Reliability / Data Protection
+## 20. Reliability / Data Protection
 
 AdaptiFlow enforces a strict data protection guarantee for business-critical events:
 
@@ -367,7 +419,7 @@ AdaptiFlow enforces a strict data protection guarantee for business-critical eve
 
 ---
 
-## 20. Edge Cases
+## 21. Edge Cases
 
 * **Spike Triggered Mid-Batch:** Pending micro-batches flush immediately or complete safely without corrupting memory states.
 * **Sustained Maximum Overload:** The pipeline remains stable in the `SHED` tier indefinitely without crashing or exhausting process memory.
@@ -376,24 +428,26 @@ AdaptiFlow enforces a strict data protection guarantee for business-critical eve
 
 ---
 
-## 21. MVP vs Stretch Goals
+## 22. Feature Implementation Status
 
 | Feature | Scope | Status |
 |---|---|---|
-| Event Simulator (Normal + Spike) | MVP | Implemented |
+| Event Simulator (Normal + Spike + Scenarios) | MVP | Implemented |
 | Deterministic Priority Classifier | MVP | Implemented |
 | Stream vs. Batch Adaptive Logic | MVP | Implemented |
 | Backpressure & Documented Shedding | MVP | Implemented |
 | Real-time Observability Dashboard | MVP | Implemented |
 | Naive Baseline Benchmark | MVP | Implemented |
-| Fault Tolerance & Idempotent Retry | Stretch Goal | Future Work |
-| Dynamic Worker Pool Scaling | Stretch Goal | Future Work |
-| Duplicate Event Detection | Stretch Goal | Future Work |
-| Formal Multi-variable Scoring Function | Stretch Goal | Future Work |
+| Fault Tolerance & Idempotent Retry (DLQ + Backoff) | Production Resilience | Implemented |
+| Dynamic Worker Pool Scaling (2 to 8 Workers) | Elasticity | Implemented |
+| Duplicate Event Detection (60s TTL + LRU Map) | Fraud & Replay Defense | Implemented |
+| Formal 6-Factor Multi-variable Decision Function | Algorithmic Optimization | Implemented |
+| Supabase Multi-Tenant Authentication & Session Management | Persistence & Identity | Implemented |
+| Non-Blocking PostgreSQL History Persistence & RLS | Persistent Analytics | Implemented |
 
 ---
 
-## 22. 30-Hour Development Scope
+## 23. 30-Hour Development Scope
 
 ```
 Phase 1: Ingestion & Simulator Setup (Hours 0–3)
@@ -407,25 +461,17 @@ Phase 7: Baseline Benchmarking & Demo Polish (Hours 26–30)
 
 ---
 
-## 23. Why This Approach?
+## 24. Why This Approach?
 
 Instead of provisioning extra infrastructure to absorb transient 20× load spikes, AdaptiFlow optimizes existing compute capacity by prioritizing high-value business transactions. Non-critical telemetry is degraded systematically, preventing service outages while avoiding unnecessary cloud infrastructure costs.
 
 ---
 
-## 24. Future Improvements
-
-* **Fault-Tolerant Retries:** Dead-letter queues (DLQ) with exponential backoff for failed critical events.
-* **Dynamic Worker Scaling:** Auto-spawning worker threads based on queue build-up.
-* **Production Message Brokers:** Integration with Apache Kafka or Redis Streams for distributed queues.
-* **Formal Decision Function:** Multi-variable decision algorithm evaluating CPU, memory, data size, and cost factors.
-
----
-
 ## 25. Limitations
 
-* **Hackathon Prototype:** Designed for local execution; uses in-memory queues rather than distributed message brokers (e.g., Kafka).
-* **Simplified Workloads:** Event handlers execute simulated processing logic rather than connecting to external database clusters or payment gateways.
+* **Hackathon Prototype:** Uses local in-memory queues rather than distributed message brokers (e.g., Apache Kafka or AWS SQS).
+* **Simulated Workloads:** Event execution involves synthetic compute delay (7ms single / 15ms batch) rather than external payment gateway HTTP round-trips.
+* **Dual Persistence Buffer:** In-memory persistence buffer is limited to 5,000 uncommitted records; if PostgreSQL is disconnected during sustained high load, records beyond 5,000 are dropped to safeguard Node.js memory.
 
 ---
 

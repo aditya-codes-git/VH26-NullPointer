@@ -10,7 +10,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.115.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^4.21.2",
     "kafkajs": "^2.2.4",
     "nanoid": "^3.3.7",

@@ -26,8 +26,11 @@
    - [backend/src/config/pipelineConfig.ts](#backendsrcconfigpipelineconfigts)
    - [backend/src/config/workloadConfig.ts](#backendsrcconfigworkloadconfigts)
    - [backend/src/api/routes.ts](#backendsrcapiroutests)
+   - [backend/src/supabase/supabaseClient.ts](#backendsrcsupabasesupabaseclientts)
+   - [backend/src/persistence/historyPersister.ts](#backendsrcpersistencehistorypersisterts)
    - [traffic-generator/traffic_generator.py](#traffic-generatortraffic_generatorpy)
    - [frontend/src/services/socketClient.ts & Dashboard Components](#frontend-telemetry--dashboard-components)
+   - [frontend/src/services/supabaseClient.ts & Auth / History Views](#frontend-supabase-auth--history-views)
 3. [Core Algorithms: Input → Logic → Output](#3-core-algorithms-input--logic--output)
 4. [Important Formulas & Mathematical Thresholds](#4-important-formulas--mathematical-thresholds)
 5. [Complete Event Lifecycle Walkthrough](#5-complete-event-lifecycle-walkthrough)
@@ -90,9 +93,13 @@ The AdaptiFlow runtime pipeline executes on Node.js/TypeScript. Events enter eit
      ├── If worker failure simulated: Isolated to RetryController (Exponential Backoff + DLQ)
      └── Completed Event: Idempotency Ledger checked to prevent duplicate side effects
           │
-          ▼
-9. TELEMETRY AGGREGATION & BROADCAST (metricsCollector.ts -> socketServer.ts)
-     └── Emitted every 500ms via WebSocket to Frontend React Dashboard
+          ├───► 9A. REAL-TIME TELEMETRY (metricsCollector.ts -> socketServer.ts)
+          │         └── Emitted every 500ms via WebSocket to Live Pipeline Dashboard
+          │
+          └───► 9B. PERSISTENT HISTORY (historyPersister.ts -> Supabase PostgreSQL)
+                    ├── Non-blocking in-memory ring buffer (zero hot-path delay)
+                    ├── Flushes in async batches of 100 to user-owned tables
+                    └── Enforces PostgreSQL Row Level Security (RLS) via auth.uid()
 ```
 
 ---
@@ -667,6 +674,83 @@ The AdaptiFlow runtime pipeline executes on Node.js/TypeScript. Events enter eit
   - `POST /api/demo/scale` $\to$ Triggers on-demand evaluation pass of `WorkerScaler`.
   - `POST /api/demo/duplicate` $\to$ Submits duplicate event ID to test immediate HTTP 409 rejection.
   - `POST /api/demo/decision` $\to$ Evaluates formalized decision function with real or custom inputs.
+  - `GET /api/persistence/status` $\to$ Returns non-blocking buffer health, queued items, flushes, and error count.
+  - `POST /api/runs/start` & `POST /api/runs/stop` $\to$ Authenticated run lifecycle controls linking events to user IDs.
+  - `GET /api/history/runs`, `GET /api/history/events`, `GET /api/history/analytics` $\to$ Authenticated, paginated queries querying user history with RLS enforcement.
+
+---
+
+### `backend/src/supabase/supabaseClient.ts`
+- **Purpose**: Centralized client factory and authentication middleware for Supabase integration, managing connection tokens, JWT verification, and Row Level Security scoping.
+- **Main Classes/Functions**:
+  - `getSupabaseClient()`: Returns the singleton anonymous Supabase client configured with environment URL and anon key.
+  - `createScopedClient(token: string)`: Creates an authenticated client forwarding the user's JWT in the `Authorization: Bearer <token>` header so PostgreSQL Row Level Security (RLS) evaluates `auth.uid() = user_id`.
+  - `authService.verifyUserToken(token: string)`: Validates JWT session with Supabase Auth API (`auth.getUser(token)`).
+  - `requireAuthMiddleware(req, res, next)`: Express middleware enforcing valid Bearer tokens for private historical queries.
+  - `optionalAuthMiddleware(req, res, next)`: Extracts user information if present, but permits anonymous pipeline simulation.
+- **Core Code Snippet**:
+  ```typescript
+  export function createScopedClient(token: string): SupabaseClient {
+    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+      global: { headers: { Authorization: `Bearer ${token}` } }
+    });
+  }
+  ```
+- **How It Works**: Decouples client instantiation between global anonymous operations and per-request authenticated scopes. Passes the caller's JWT directly to PostgreSQL via PostgREST headers so Supabase evaluates RLS policies natively.
+- **Used By**: `routes.ts`, `server.ts`, `historyPersister.ts`.
+- **Why It Matters**: Prevents credential leakage while ensuring strict multi-tenant data isolation directly at the database engine level.
+
+---
+
+### `backend/src/persistence/historyPersister.ts`
+- **Purpose**: High-throughput, non-blocking asynchronous persistence engine that buffers runtime events, retries, duplicates, and scaling transitions in an in-memory ring buffer and flushes them to Supabase PostgreSQL without stalling the hot event-processing path.
+- **Main Classes/Functions**:
+  - `recordEvent(event, executionDurationMs)`: Enqueues processed/shed event into the memory buffer.
+  - `recordRetry(log)`: Enqueues retry audit record.
+  - `recordDuplicate(log)`: Enqueues duplicate drop record.
+  - `recordScaling(log)`: Enqueues worker scaling record.
+  - `recordDecision(log)`: Enqueues decision engine evaluation record.
+  - `startRun(userId, name, scenario, targetRate)`: Inserts a new row into `workload_runs` and activates run attribution.
+  - `stopRun()`: Finalizes run metrics and marks run status as `COMPLETED`.
+  - `flushBatch()`: Asynchronously sends up to 100 buffered records in single multi-row `insert()` queries.
+- **Core Code Snippet**:
+  ```typescript
+  // Non-blocking write: WorkerPool calls recordEvent without awaiting I/O
+  public recordEvent(event: PipelineEvent, executionDurationMs: number = 0): void {
+    if (this.buffer.length >= this.maxBufferSize) {
+      this.buffer.shift(); // Drop oldest to prevent memory leak if DB unavailable
+      this.totalDroppedBufferItems++;
+    }
+    this.buffer.push({
+      run_id: this.activeRun?.id || null,
+      user_id: this.activeRun?.user_id || null,
+      event_id: event.id,
+      event_type: event.type,
+      priority: event.priority,
+      status: event.status,
+      execution_duration_ms: executionDurationMs,
+      timestamp: new Date(event.timestamp).toISOString()
+    });
+  }
+  ```
+- **How It Works**: Incoming events are immediately pushed to an in-memory queue. A background timer invokes `flushBatch()` every 1,000ms, slicing up to 100 items and executing bulk PostgreSQL inserts. If the database is slow or offline, buffer capacity caps at 5,000 items, shedding oldest items rather than crashing the Node.js event loop.
+- **Used By**: `server.ts`, `workerPool.ts`, `retryController.ts`, `workerScaler.ts`, `duplicateDetector.ts`.
+- **Why It Matters**: Guarantees zero latency penalty on real-time event routing. Ensures the live pipeline processes at full speed even under intermittent database network lag.
+
+---
+
+### `frontend/src/services/supabaseClient.ts & Auth / History Views`
+- **Purpose**: Frontend authentication and persistent history visualization suite.
+- **Key Modules**:
+  - `frontend/src/services/supabaseClient.ts`: Singleton browser client maintaining local session storage and token refresh.
+  - `frontend/src/components/AuthModal.tsx`: Sign Up / Sign In modal dialog with validation and error alerts.
+  - `frontend/src/components/HistoricalViews.tsx`:
+    - `EventHistoryView`: Paginated search table with filters for Priority, Strategy, Status, and Event Type.
+    - `RunHistoryView`: List of completed workload runs with summary metrics and start/stop timestamps.
+    - `HistoricalAnalyticsView`: Aggregate bar charts and metric cards across all user test runs.
+    - `AccountView`: User profile card with active session metadata and token diagnostic details.
+- **How It Works**: Uses Supabase JS SDK to subscribe to `onAuthStateChange`. When logged in, API requests automatically attach the session JWT Bearer token to read isolated user history.
 
 ---
 

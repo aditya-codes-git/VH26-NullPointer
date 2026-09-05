@@ -45,6 +45,8 @@ export class RetryController {
   private lastRetry: RecoveryAuditEntry | null = null;
   private lastRecovery: RecoveryAuditEntry | null = null;
 
+  public onAuditLog?: (entry: RecoveryAuditEntry) => void;
+
   constructor(config: PipelineConfig, queueManager: QueueManager) {
     this.config = config;
     this.queueManager = queueManager;
@@ -325,6 +327,10 @@ export class RetryController {
     const existing = this.eventLifecycleMap.get(entry.eventId) || [];
     existing.push(entry);
     this.eventLifecycleMap.set(entry.eventId, existing);
+
+    if (this.onAuditLog) {
+      this.onAuditLog(entry);
+    }
   }
 
   private formatTime(timestamp: number): string {
