@@ -13,7 +13,6 @@ import {
   Ticket,
   Truck,
   CreditCard,
-  Activity,
 } from 'lucide-react';
 
 /* ==========================================================================

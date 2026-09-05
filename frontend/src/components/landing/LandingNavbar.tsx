@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useTheme } from '../../context/ThemeContext.js';
-import { Sun, Moon, Menu, X, ArrowRight, Activity } from 'lucide-react';
+import { Sun, Moon, Menu, X, ArrowRight } from 'lucide-react';
 
 interface LandingNavbarProps {
   onSignIn: () => void;
